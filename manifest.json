@@ -3,5 +3,11 @@
     "entry": "${modFile}",
     "version": "${modVersion}",
     "type": "native",
-    "platform": "${modPlatform}"
+    "platform": "${modPlatform}",
+    "dependencies": [
+        {
+            "name": "iListenAttentively",
+            "version": ">=1.0.0"
+        }
+    ]
 }
