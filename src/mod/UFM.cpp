@@ -40,17 +40,18 @@ bool UFM::enable() {
         [](ll::event::PlayerPlacedBlockEvent& event) {
             if (event.placedBlock().getTypeName() != "minecraft:glass") return;
 
-            auto* dirtBlock = BlockTypeRegistry::lookupByName("minecraft:dirt", true);
-            if (!dirtBlock) return;
+            // Ambil Block dirt via registry
+            auto& registry  = BlockTypeRegistry::get();
+            auto& dirtBlock = registry.getDefaultBlockState("minecraft:dirt");
 
             UpdateBlockPacket pkt;
 
-            auto& payload = static_cast<ll::PayloadPacket<UpdateBlockPacketPayload>&>(pkt).mPayload;
-            payload.mPos         = event.pos();
-            payload.mLayer       = 0; // Standard layer
-            payload.mUpdateFlags = 1; // Network update
-            payload.mRuntimeId   = dirtBlock->getDefaultState().getRuntimeId();
-    
+            // Field payload langsung ada di pkt karena multiple inheritance
+            pkt.mPos         = event.pos();
+            pkt.mLayer       = 0;
+            pkt.mUpdateFlags = 1;
+            pkt.mRuntimeId   = dirtBlock.getRuntimeId();
+
             event.self().sendNetworkPacket(pkt);
         }
     );
