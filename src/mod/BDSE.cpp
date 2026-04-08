@@ -7,6 +7,7 @@
 #include "ll/api/io/Logger.h"
 #include "ll/api/mod/RegisterHelper.h"
 
+#include "ll/api/event/player/PlayerAttackEvent.h"
 #include "ll/api/event/player/PlayerDisconnectEvent.h"
 #include "ll/api/event/player/PlayerJoinEvent.h"
 #include "ll/api/service/Bedrock.h"
@@ -31,6 +32,9 @@
 #include "mc/world/scores/Scoreboard.h"
 #include "mc/world/scores/ScoreboardId.h"
 #include "mc/world/scores/ScoreboardOperationResult.h"
+
+#include "mc/deps/shared_types/legacy/actor/ActorDamageCause.h"
+#includ3 "mc/deps/shared_types/legacy/LevelSoundEvent.h"
 
 namespace bds_essentials {
 
@@ -126,6 +130,18 @@ bool BDSE::enable() {
         )
     );
 
+    gListeners.insert(
+        gListeners.begin(),
+        bus.emplaceListener<ll::event::PlayerAttackEvent>(
+            [](ll::event::PlayerAttackEvent& event) {
+                if (event.cause() == ActorDamageCause::Projectile) {
+                    Player& player = event.self();
+                    player.playSound(LevelSoundEvent::Boost, player.getPosition(), 1);
+                }
+            }
+        )
+    );
+
     /*
     gBlockPlaceListener = bus.emplaceListener<ll::event::PlayerPlacedBlockEvent>(
         [this](ll::event::PlayerPlacedBlockEvent& event) {
@@ -165,4 +181,4 @@ bool BDSE::disable() {
 
 } // namespace bds_essentials
 
-LL_REGISTER_MOD(unbreakable_farmland::BDSE, unbreakable_farmland::BDSE::getInstance());
+LL_REGISTER_MOD(bds_essentials::BDSE, bds_essentials::BDSE::getInstance());
