@@ -84,7 +84,7 @@ LL_TYPE_INSTANCE_HOOK(
     origin("", newMessage, filteredMessage);
 }
 
-LL__TYPE_INSTANCE_HOOK(
+LL_TYPE_INSTANCE_HOOK(
     AchievementsWillBeDisabledHook,
     ll::memory::HookPriority::Normal,
     LevelData,
