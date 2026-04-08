@@ -12,6 +12,10 @@ class BDSE {
 public:
     static BDSE& getInstance();
 
+    Scoreboard* getScoreboard()      const { return mScoreboard; }
+    Objective*  getXPObjective()     const { return mXPObjective; }
+    Objective*  getHealthObjective() const { return mHealthObjective; }
+
     BDSE() : mSelf(*ll::mod::NativeMod::current()) {}
 
     [[nodiscard]] ll::mod::NativeMod& getSelf() const { return mSelf; }

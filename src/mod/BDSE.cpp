@@ -7,6 +7,8 @@
 #include "ll/api/io/Logger.h"
 #include "ll/api/mod/RegisterHelper.h"
 
+#include "ll/api/memory/Hook.h"
+
 #include "ll/api/event/player/PlayerAttackEvent.h"
 #include "ll/api/event/player/PlayerDisconnectEvent.h"
 #include "ll/api/event/player/PlayerJoinEvent.h"
@@ -37,6 +39,29 @@
 // #include "mc/deps/shared_types/legacy/LevelSoundEvent.h"
 
 namespace bds_essentials {
+
+LL_TYPE_INSTANCE_HOOK(
+    PlayerAddLevelHook,
+    ll::memory::HookPriority::Normal,
+    Player,
+    &Player::$addLevels,
+    void,
+    int lvl
+) {
+    auto& bdse        = BDSE::getInstance();
+    auto* scoreboard  = bdse.getScoreboard();
+    auto* xpObjective = bdse.getXPObjective();
+
+    if (scoreboard && xpObjective) {
+        ScoreboardId const& id = scoreboard->getScoreboardId(*this); // *this = Player
+        if (id != ScoreboardId::INVALID()) {
+            ScoreboardOperationResult result;
+            scoreboard->modifyPlayerScore(result, id, *xpObjective, lvl, PlayerScoreSetFunction::Add);
+        }
+    }
+
+    origin(lvl);
+}
 
 BDSE& BDSE::getInstance() {
     static BDSE instance;
@@ -71,6 +96,8 @@ bool BDSE::enable() {
 
     mXPObjective = mScoreboard->addObjective("MostLVL", "•> Most Level <•", *criteria);
     mScoreboard->setDisplayObjective(Scoreboard::DISPLAY_SLOT_SIDEBAR(), *mXPObjective, ObjectiveSortOrder::Ascending);
+
+    PlayerAddLevelHook::hook();
 
     auto& bus = ll::event::EventBus::getInstance();
 
@@ -143,6 +170,8 @@ bool BDSE::enable() {
 }
 
 bool BDSE::disable() {
+    PlayerAddLevelHook::unhook();
+
     auto& bus = ll::event::EventBus::getInstance();
 
     for (auto& listener : gListeners) {
