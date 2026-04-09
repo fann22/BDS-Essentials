@@ -9,22 +9,28 @@
 
 #include "ll/api/memory/Hook.h"
 
-#include "ll/api/event/player/PlayerAttackEvent.h"
+// #include "ll/api/event/player/PlayerAttackEvent.h"
+#include "ll/api/event/player/PlayerChatEvent.h"
+#include "ll/api/event/player/PlayerDieEvent.h"
 #include "ll/api/event/player/PlayerDisconnectEvent.h"
 #include "ll/api/event/player/PlayerJoinEvent.h"
-#include "ll/api/event/player/PlayerDieEvent.h"
 
 #include "ll/api/service/Bedrock.h"
 
 #include "ila/event/minecraft/world/actor/MobHealthChangeEvent.h"
 #include "ila/event/minecraft/world/level/block/FarmDecayEvent.h"
 
+// #include "mc/deps/shared_types/legacy/LevelSoundEvent.h"
+// #include "mc/deps/shared_types/legacy/actor/ActorDamageCause.h"
+
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeInstance.h"
 #include "mc/world/attribute/AttributeInstanceRef.h"
 #include "mc/world/attribute/BaseAttributeMap.h"
 
+#include "mc/world/level/ILevel.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/storage/LevelData.h"
 
@@ -37,9 +43,6 @@
 #include "mc/world/scores/Scoreboard.h"
 #include "mc/world/scores/ScoreboardId.h"
 #include "mc/world/scores/ScoreboardOperationResult.h"
-
-// #include "mc/deps/shared_types/legacy/actor/ActorDamageCause.h"
-// #include "mc/deps/shared_types/legacy/LevelSoundEvent.h"
 
 namespace bds_essentials {
 
@@ -67,24 +70,6 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 LL_TYPE_INSTANCE_HOOK(
-    DisplayChatMessageHook,
-    ll::memory::HookPriority::Normal,
-    Player,
-    &Player::$displayChatMessage,
-    void,
-    ::std::string const& author,
-    ::std::string const& message,
-    ::std::optional<::std::string> const filteredMessage
-) {
-    auto& bdse        = BDSE::getInstance();
-    bdse.getSelf().getLogger().info("{}: {}", author, message);
-
-    std::string const& newMessage = "§c" + author + "§f: " + message;
-
-    origin("", newMessage, filteredMessage);
-}
-
-LL_TYPE_INSTANCE_HOOK(
     AchievementsWillBeDisabledHook,
     ll::memory::HookPriority::Normal,
     LevelData,
@@ -104,6 +89,16 @@ LL_TYPE_INSTANCE_HOOK(
     // 🦗...
 }
 
+const ScoreboardId* getOrCreateScoreboardId(Player& player) {
+    Scoreboard *scoreboard = BDSE::getInstance().getScoreboard();
+    if (!scoreboard) return nullptr;
+
+    ScoreboardId const* id = &scoreboard->getScoreboardId(player);
+    if (*id == ScoreboardId::INVALID()) {
+        id = &scoreboard->createScoreboardId(player);
+    }
+    return id;
+}
 
 BDSE& BDSE::getInstance() {
     static BDSE instance;
@@ -119,6 +114,7 @@ bool BDSE::load() {
 }
 
 bool BDSE::enable() {
+    ll::service::getLevel()->getLevelData().mAchievementsDisabled = false;
     mScoreboard = &ll::service::getLevel()->getScoreboard();
 
     auto objectives = mScoreboard->getObjectives();
@@ -141,7 +137,6 @@ bool BDSE::enable() {
 
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
-    DisplayChatMessageHook::hook();
     PlayerAddLevelHook::hook();
 
     auto& bus = ll::event::EventBus::getInstance();
@@ -153,76 +148,89 @@ bool BDSE::enable() {
 
     gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ll::event::PlayerJoinEvent>(
-            [this](ll::event::PlayerJoinEvent& event) {
-                Player&              player  = event.self();
-                auto&                attrMap = const_cast<BaseAttributeMap&>(*player.getAttributes());
-                AttributeInstanceRef ref     = attrMap.getMutableInstance(Player::LEVEL().mIDValue);
-                float                lvl     = ref.mPtr->mCurrentValue;
+        bus.emplaceListener<ll::event::PlayerJoinEvent>([this](ll::event::PlayerJoinEvent& event) {
+            Player&              player  = event.self();
+            auto&                attrMap = const_cast<BaseAttributeMap&>(*player.getAttributes());
+            AttributeInstanceRef ref     = attrMap.getMutableInstance(Player::LEVEL().mIDValue);
+            float                lvl     = ref.mPtr->mCurrentValue;
 
-                ScoreboardId const* id = &mScoreboard->getScoreboardId(player);
-                if (*id == ScoreboardId::INVALID()) {
-                    id = &mScoreboard->createScoreboardId(player);
-                }
-                ScoreboardOperationResult result;
-                mScoreboard->modifyPlayerScore(result, *id, *mHealthObjective, player.getHealth(), PlayerScoreSetFunction::Set);
-                mScoreboard->modifyPlayerScore(result, *id, *mXPObjective, int(lvl), PlayerScoreSetFunction::Set);
-            }
-        )
+            ScoreboardId const* id = getOrCreateScoreboardId(player);
+
+            ScoreboardOperationResult result;
+            mScoreboard->modifyPlayerScore(result, *id, *mHealthObjective, player.getHealth(), PlayerScoreSetFunction::Set);
+            mScoreboard->modifyPlayerScore(result, *id, *mXPObjective, int(lvl), PlayerScoreSetFunction::Set);
+        })
     );
 
     gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ll::event::PlayerDisconnectEvent>(
-            [this](ll::event::PlayerDisconnectEvent& event) {
-                ScoreboardId const* id = &mScoreboard->getScoreboardId(event.self());
-                if (*id == ScoreboardId::INVALID()) {
-                    id = &mScoreboard->createScoreboardId(event.self());
-                }
-                mScoreboard->resetPlayerScore(*id);
-            }
-        )
+        bus.emplaceListener<ll::event::PlayerDisconnectEvent>([this](ll::event::PlayerDisconnectEvent& event) {
+            ScoreboardId const* id = getOrCreateScoreboardId(event.self());
+            if (id != nullptr) mScoreboard->resetPlayerScore(*id);
+        })
     );
 
     gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ll::event::PlayerDieEvent>(
-            [this](ll::event::PlayerDieEvent& event) {
-                ScoreboardId const* id = &mScoreboard->getScoreboardId(event.self());
-                if (*id == ScoreboardId::INVALID()) {
-                    id = &mScoreboard->createScoreboardId(event.self());
-                }
-                ScoreboardOperationResult result;
-                mScoreboard->modifyPlayerScore(result, *id, *mXPObjective, 0, PlayerScoreSetFunction::Set);
-            }
-        )
+        bus.emplaceListener<ll::event::PlayerDieEvent>([this](ll::event::PlayerDieEvent& event) {
+            ScoreboardId const* id = getOrCreateScoreboardId(event.self());
+            if (id == nullptr) return;
+
+            ScoreboardOperationResult result;
+            mScoreboard->modifyPlayerScore(
+                result, *id,
+                *mXPObjective,
+                0,
+                PlayerScoreSetFunction::Set
+            );
+        })
     );
 
     gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ila::mc::MobHealthChangeAfterEvent>(
-            [this](ila::mc::MobHealthChangeAfterEvent& event) {
-                if (!event.self().isPlayer() || event.newValue() > float(event.self().getMaxHealth())) return;
-                BDSE::getInstance().getSelf().getLogger().info("{} -> {}", event.oldValue(), event.newValue());
-                ScoreboardId const&       id = mScoreboard->createScoreboardId(event.self());
-                ScoreboardOperationResult result;
-                mScoreboard->modifyPlayerScore(result, id, *mHealthObjective, int(event.newValue()), PlayerScoreSetFunction::Set);
-            }
-        )
+        bus.emplaceListener<ila::mc::MobHealthChangeAfterEvent>([this](ila::mc::MobHealthChangeAfterEvent& event) {
+            if (!event.self().isPlayer() || event.newValue() > float(event.self().getMaxHealth())) return;
+            // BDSE::getInstance().getSelf().getLogger().info("{} -> {}", event.oldValue(), event.newValue());
+
+            ScoreboardId const* id = getOrCreateScoreboardId(static_cast<Player&>(event.self()));
+            if (id == nullptr) return;
+
+            ScoreboardOperationResult result;
+            mScoreboard->modifyPlayerScore(
+                result,
+                *id,
+                *mHealthObjective,
+                int(event.newValue()), 
+                PlayerScoreSetFunction::Set
+            );
+        })
     );
-/*
+
+    /*gListeners.insert(
+        gListeners.begin(),
+        bus.emplaceListener<ll::event::PlayerAttackEvent>([](ll::event::PlayerAttackEvent& event) {
+            BDSE::getInstance().getSelf().getLogger().info("Damage source: {}", event.cause());
+            if (event.cause() == SharedTypes::Legacy::ActorDamageCause::Projectile) {
+                Actor& player = event.self();
+                player.playSynchronizedSound(SharedTypes::Legacy::LevelSoundEvent::LevelUp, player.getPosition(), 0, true);
+            }
+        })
+    );*/
+
     gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ll::event::PlayerAttackEvent>(
-            [](ll::event::PlayerAttackEvent& event) {
-                if (event.cause() == ActorDamageCause::Projectile) {
-                    Player& player = event.self();
-                    player.playSound(LevelSoundEvent::Boost, player.getPosition(), 1);
+        bus.emplaceListener<ll::event::PlayerChatEvent>([](ll::event::PlayerChatEvent& event) {
+            BDSE::getInstance().getSelf().getLogger().info("{}: {}", event.self().getRealName(), event.message());
+            for (auto& [uuid, entry] : ll::service::getLevel()->getPlayerList()) {
+                Player* player = ll::service::getLevel()->getPlayer(uuid);
+                if (player) {
+                    auto message = "§b" + event.self().getRealName() + "§f: §l" + event.message();
+                    player->sendMessage(message);
                 }
             }
-        )
+            event.cancel();
+        })
     );
-*/
 
     getSelf().getLogger().info("loaded.");
     return true;
@@ -231,7 +239,6 @@ bool BDSE::enable() {
 bool BDSE::disable() {
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
-    DisplayChatMessageHook::unhook();
     PlayerAddLevelHook::unhook();
 
     auto& bus = ll::event::EventBus::getInstance();
