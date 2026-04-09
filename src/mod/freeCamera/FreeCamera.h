@@ -2,6 +2,7 @@
 #pragma once
 
 #include "mc/world/actor/player/Player.h"
+#include "mc/network/packet/PlayerSkinPacket.h"
 
 #include <unordered_set>
 
@@ -9,6 +10,7 @@ namespace bds_essentials::freeCamera {
 class FreeCameraManager {
 public:
     std::unordered_set<unsigned long long> FreeCamList;
+    PlayerSkinPacket* cachedSkinPacket = nullptr;
     static FreeCameraManager&              getInstance() {
         static FreeCameraManager instance;
         return instance;

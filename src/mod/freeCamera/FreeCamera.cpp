@@ -29,66 +29,24 @@ void EnableFreeCameraPacket(Player* pl) {
     pkt.mTargetPlayer   = pl->getOrCreateUniqueID();
     pkt.mTick->mValue   = ll::service::getLevel()->getCurrentTick().tickID;
     pkt.sendTo(*pl);
-    // ((gmlib::world::actor::GMPlayer*)pl)->setClientGamemode(GameType::Spectator);
 }
 
 void SendFakePlayerPacket(Player* pl) {
-    // Client Player
     auto pkt1             = AddPlayerPacket(*pl);
     pkt1.mEntityId->rawID = pkt1.mEntityId->rawID + 114514;
     auto randomUuid       = mce::UUID::random();
     pkt1.mUuid            = randomUuid;
     pl->sendNetworkPacket(pkt1);
-    // Update Skin
-/*
-    PlayerSkinPacketPayload* payload = reinterpret_cast<PlayerSkinPacketPayload*>(
-        ::operator new(sizeof(PlayerSkinPacketPayload))
-    );
-    new (&payload->mUUID) mce::UUID(randomUuid);
-    new (&payload->mSkin) SerializedSkinRef(*pl->mSkin);
-    new (&payload->mLocalizedNewSkinName) std::string("");
-    new (&payload->mLocalizedOldSkinName)std::string("");
 
-    PlayerSkinPacket* packet = reinterpret_cast<PlayerSkinPacket*>(
-        ::operator new(sizeof(PlayerSkinPacket))
-    );
-    packet->$ctor(std::move(*payload));
-    pl->sendNetworkPacket(*packet);
-    packet->$dtor();
-    ::operator delete(packet);
-    ::operator delete(payload);*/
+    auto* cached = FreeCameraManager::getInstance().cachedSkinPacket;
+    if (!cached) return;
 
-    // PlayerSkinPacket pkt2      = PlayerSkinPacket();
-    // pkt2.mUUID                 = randomUuid;
-    // pkt2.mSkin                 = *pl->mSkin;
-    // pkt2.mLocalizedNewSkinName = "";
-    // pkt2.mLocalizedOldSkinName = "";
-    // pkt2.sendTo(*pl);
-
-    // alignas(PlayerSkinPacket) std::byte buf[sizeof(PlayerSkinPacket)];
-    // ll::memory::construct<PlayerSkinPacket>(buf, 0);
-    // auto* pkt = reinterpret_cast<PlayerSkinPacket*>(buf);
-    // auto* payload = static_cast<PlayerSkinPacketPayload*>(pkt);
-    // payload->mUUID                 = randomUuid;
-    // payload->mSkin                 = *pl->mSkin;
-    // payload->mLocalizedNewSkinName = "";
-    // payload->mLocalizedOldSkinName = "";
+    cached.mPayload.mUUID                 = randomUuid;
+    cached.mPayload.mSkin                 = *pl->mSkin;
+    cached.mPayload.mLocalizedNewSkinName = "";
+    cached.mPayload.mLocalizedOldSkinName = "";
     
-    // pkt->sendTo(*pl);
-    // pkt->~PlayerSkinPacket();
-
-    // gmlib::network::GMBinaryStream bs;
-    // bs.writePacketHeader(MinecraftPacketIds::PlayerSkin);
-    // bs.writeUuid(randomUuid);
-    // bs.writeSkin(skin);
-    // bs.writeString("");
-    // bs.writeString("");
-    // bs.writeBool(true);
-    // bs.sendTo(
-    //     *(gmlib::world::actor::GMPlayer*)pl,
-    //     NetworkPeer::Reliability::ReliableOrdered,
-    //     Compressibility::Compressible
-    // );
+    pl->sendNetworkPacket(*cached);
 }
 
 void DisableFreeCameraPacket(Player* pl) {
@@ -97,61 +55,29 @@ void DisableFreeCameraPacket(Player* pl) {
     pkt.mTargetPlayer   = pl->getOrCreateUniqueID();
     pkt.mTick->mValue   = ll::service::getLevel()->getCurrentTick().tickID;
     pkt.sendTo(*pl);
-    // ((gmlib::world::actor::GMPlayer*)pl)->setClientGamemode(pl->getPlayerGameType());
+
     auto uniqueId  = pl->getOrCreateUniqueID();
     uniqueId.rawID = uniqueId.rawID + 114514;
-    // RemoveActorPacket(uniqueId).sendTo(*pl);
+
     auto pkt2      = RemoveActorPacket();
     pkt2.mEntityId = uniqueId;
     pkt2.sendTo(*pl);
     UpdateAbilitiesPacket(pl->getOrCreateUniqueID(), pl->getAbilities()).sendTo(*pl);
 }
 
-/*
-void SendActorLinkPacket(Player* pl) {
-    auto links = pl->getLinks();
-    for (auto& link : links) {
-        GMLIB_BinaryStream bs;
-        if (ll::service::getLevel()->getPlayer(link.A)) {
-            bs.writeVarInt64(link.A.id + 114514);
-        } else {
-            bs.writeVarInt64(link.A.id);
-        }
-        if (ll::service::getLevel()->getPlayer(link.B)) {
-            bs.writeVarInt64(link.B.id + 114514);
-        } else {
-            bs.writeVarInt64(link.B.id);
-        }
-        bs.writeUnsignedChar((uchar)link.type);
-        bs.writeBool(link.mImmediate);
-        bs.writeBool(link.mPassengerInitiated);
-        GMLIB::Server::NetworkPacket<(int)MinecraftPacketIds::SetActorLink> pkt(bs.getAndReleaseData());
-        pl->sendNetworkPacket(pkt);
-    }
-}
-*/
-
 void FreeCameraManager::EnableFreeCamera(Player* pl) {
     FreeCameraManager::getInstance().FreeCamList.insert(pl->getNetworkIdentifier().mGuid.g);
     EnableFreeCameraPacket(pl);
     SendFakePlayerPacket(pl);
-    // SendActorLinkPacket(pl);
 }
 
 void FreeCameraManager::DisableFreeCamera(Player* pl) {
     auto pos   = pl->getFeetPos();
     auto dimid = pl->getDimensionId();
-    // auto links = pl->getLinks();
+
     FreeCameraManager::getInstance().FreeCamList.erase(pl->getNetworkIdentifier().mGuid.g);
     DisableFreeCameraPacket(pl);
     pl->teleport(pos, dimid);
-    // for (auto& link : links) {
-    //     auto ride  = ll::service::getLevel()->fetchEntity(link.A);
-    //     auto rider = ll::service::getLevel()->fetchEntity(link.B);
-    //     if (ride && rider) {
-    //        rider->startRiding(*ride);
-    //    }
-    //}
 }
 
 LL_TYPE_INSTANCE_HOOK(

@@ -58,12 +58,36 @@
 #include "mc/world/scores/ScoreboardId.h"
 #include "mc/world/scores/ScoreboardOperationResult.h"
 
+#include "mc/network/NetworkIdentifier.h"
+#include "mc/network/ServerNetworkHandler.h"
 #include "mc/network/packet/ActorEventPacket.h"
 #include "mc/network/packet/TextPacket.h"
+#include "mc/network/packet/PlayerSkinPacket.h"
 #include "mc/network/packet/PlaySoundPacket.h"
 #include "mc/network/packet/PlaySoundPacketPayload.h"
 
 namespace bds_essentials {
+
+LL_TYPE_INSTANCE_HOOK(
+    PlayerSkinPacketHook,
+    ll::memory::HookPriority::Normal,
+    ServerNetworkHandler,
+    &ServerNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const& id,
+    PlayerSkinPacket const&  pkt
+) {
+    if (freeCamera::FreeCameraManager::getInstance().cachedSkinPacket == nullptr) {
+        auto* buf = reinterpret_cast<PlayerSkinPacket*>(
+            ::operator new(sizeof(&pkt))
+        );
+        std::memcpy(buf, &pkt, sizeof(&pkt));
+        freeCamera::FreeCameraManager::getInstance().cachedSkinPacket = buf;
+        BDSE::getInstance().getSelf().getLogger().info("PlayerSkinPacket have been cached");
+    }
+
+    origin(id, pkt);
+}
 
 LL_TYPE_INSTANCE_HOOK(
     PlayerAddLevelHook,
