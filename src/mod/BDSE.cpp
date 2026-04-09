@@ -200,7 +200,7 @@ bool BDSE::enable() {
                 result,
                 *id,
                 *mHealthObjective,
-                int(event.newValue()), 
+                int((std::round(event.newValue() * 2) / 2) * 2), 
                 PlayerScoreSetFunction::Set
             );
         })
