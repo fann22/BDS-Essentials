@@ -224,7 +224,7 @@ bool BDSE::enable() {
             for (auto& [uuid, entry] : ll::service::getLevel()->getPlayerList()) {
                 Player* player = ll::service::getLevel()->getPlayer(uuid);
                 if (player) {
-                    auto message = "§b" + event.self().getRealName() + "§f: §l" + event.message();
+                    auto message = "§b" + event.self().getRealName() + "§f: " + event.message();
                     player->sendMessage(message);
                 }
             }
