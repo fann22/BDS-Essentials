@@ -9,19 +9,22 @@
 
 #include "ll/api/memory/Hook.h"
 
-// #include "ll/api/event/player/PlayerAttackEvent.h"
+#include "ll/api/event/entity/ActorHurtEvent.h"
+
 #include "ll/api/event/player/PlayerChatEvent.h"
 #include "ll/api/event/player/PlayerDieEvent.h"
 #include "ll/api/event/player/PlayerDisconnectEvent.h"
 #include "ll/api/event/player/PlayerJoinEvent.h"
 
+#include "ll/api/thread/ThreadPoolExecutor.h"
+
 #include "ll/api/service/Bedrock.h"
 
+#include "ila/event/minecraft/server/ServerPongEvent.h"
 #include "ila/event/minecraft/world/actor/MobHealthChangeEvent.h"
 #include "ila/event/minecraft/world/level/block/FarmDecayEvent.h"
 
-// #include "mc/deps/shared_types/legacy/LevelSoundEvent.h"
-// #include "mc/deps/shared_types/legacy/actor/ActorDamageCause.h"
+#include "mc/deps/shared_types/legacy/actor/ActorDamageCause.h"
 
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
@@ -43,6 +46,9 @@
 #include "mc/world/scores/Scoreboard.h"
 #include "mc/world/scores/ScoreboardId.h"
 #include "mc/world/scores/ScoreboardOperationResult.h"
+
+#include "mc/network/packet/PlaySoundPacket.h"
+#include "mc/network/packet/PlaySoundPacketPayload.h"
 
 namespace bds_essentials {
 
@@ -117,6 +123,14 @@ BDSE& BDSE::getInstance() {
 }
 
 static std::vector<ll::event::ListenerPtr> gListeners;
+static std::vector<std::string> gMotdMessages = {
+    "•> Anomaly Survival! <•",
+    "•> DEAD = GAY <•",
+    "•> Vanilla Survival! <•",
+    "•> 104.248.154.230:19134 <•"
+};
+static std::atomic<int>  gMotdIndex = 0;
+static std::atomic<bool> gRunning   = false;
 
 bool BDSE::load() {
     // getSelf().getLogger().debug("Loading...");
@@ -125,6 +139,14 @@ bool BDSE::load() {
 }
 
 bool BDSE::enable() {
+    gRunning = true;
+    ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
+        while (gRunning) {
+            gMotdIndex = (gMotdIndex + 1) % gMotdMessages.size();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        }
+    });
+
     ll::service::getLevel()->getLevelData().mAchievementsDisabled = false;
     mScoreboard = &ll::service::getLevel()->getScoreboard();
 
@@ -155,6 +177,15 @@ bool BDSE::enable() {
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ila::mc::FarmDecayBeforeEvent>([](ila::mc::FarmDecayBeforeEvent& event) { event.cancel(); })
+    );
+
+    gListeners.insert(
+        gListeners.begin(),
+        bus.emplaceListener<ila::mc::ServerPongBeforeEvent>(
+            [](ila::mc::ServerPongBeforeEvent& event) {
+                event.motd() = gMotdMessages[gMotdIndex];
+            }
+        )
     );
 
     gListeners.insert(
@@ -217,16 +248,24 @@ bool BDSE::enable() {
         })
     );
 
-    /*gListeners.insert(
+    gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ll::event::PlayerAttackEvent>([](ll::event::PlayerAttackEvent& event) {
-            BDSE::getInstance().getSelf().getLogger().info("Damage source: {}", event.cause());
-            if (event.cause() == SharedTypes::Legacy::ActorDamageCause::Projectile) {
-                Actor& player = event.self();
-                player.playSynchronizedSound(SharedTypes::Legacy::LevelSoundEvent::LevelUp, player.getPosition(), 0, true);
+        bus.emplaceListener<ll::event::ActorHurtEvent>([](ll::event::ActorHurtEvent& event) {
+            // BDSE::getInstance().getSelf().getLogger().info("Damage source: {}", event.source().mCause);
+            if (event.source().mCause == SharedTypes::Legacy::ActorDamageCause::Projectile) {
+                Player* player = ll::service::getLevel()->getPlayer(event.source().getEntityUniqueID());
+                if (!player) return;
+
+                PlaySoundPacket packet(PlaySoundPacketPayload(
+                    "random.orb",
+                    player->getPosition(),
+                    0.8f, // volume
+                    1.2f  // pitch
+                ));
+                player->sendNetworkPacket(packet);
             }
         })
-    );*/
+    );
 
     gListeners.insert(
         gListeners.begin(),
@@ -248,6 +287,8 @@ bool BDSE::enable() {
 }
 
 bool BDSE::disable() {
+    gRunning = false;
+
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
     PlayerAddLevelHook::unhook();
