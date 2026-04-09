@@ -41,10 +41,10 @@ void SendFakePlayerPacket(Player* pl) {
     auto* cached = FreeCameraManager::getInstance().cachedSkinPacket;
     if (!cached) return;
 
-    cached.mPayload.mUUID                 = randomUuid;
-    cached.mPayload.mSkin                 = *pl->mSkin;
-    cached.mPayload.mLocalizedNewSkinName = "";
-    cached.mPayload.mLocalizedOldSkinName = "";
+    cached->mPayload.mUUID                 = randomUuid;
+    cached->mPayload.mSkin                 = *pl->mSkin;
+    cached->mPayload.mLocalizedNewSkinName = "";
+    cached->mPayload.mLocalizedOldSkinName = "";
     
     pl->sendNetworkPacket(*cached);
 }
