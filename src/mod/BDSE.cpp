@@ -342,7 +342,6 @@ bool BDSE::enable() {
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::ActorHurtEvent>([](ll::event::ActorHurtEvent& event) {
-            // BDSE::getInstance().getSelf().getLogger().info("Damage source: {}", event.source().mCause);
             if (event.source().mCause == SharedTypes::Legacy::ActorDamageCause::Projectile) {
                 Player* player = ll::service::getLevel()->getPlayer(event.source().getEntityUniqueID());
                 if (!player) return;
