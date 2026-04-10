@@ -16,6 +16,7 @@
 #include "mc/platform/UUID.h"
 #include "mc/server/ServerPlayer.h"
 #include "mc/world/actor/Actor.h "
+#include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/Tick.h"
