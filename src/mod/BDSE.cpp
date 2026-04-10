@@ -72,39 +72,6 @@
 
 namespace bds_essentials {
 
-/*LL_AUTO_TYPE_INSTANCE_HOOK(
-    ServerNetworkHandlerHook,
-    ll::memory::HookPriority::Normal,
-    ServerNetworkHandler,
-    &ServerNetworkHandler::$handle,
-    void,
-    NetworkIdentifier const& id,
-    PlayerSkinPacket const& pkt
-) {
-    if (!freeCamera::FreeCameraManager::getInstance().cachedSkinPacket.has_value()) {
-        freeCamera::FreeCameraManager::getInstance().cachedSkinPacket.emplace(pkt);
-        BDSE::getInstance().getSelf().getLogger().info("PlayerSkinPacket cached!");
-    }
-
-    origin(id, pkt);
-}
-LL_AUTO_TYPE_INSTANCE_HOOK(
-    NetEventCallbackHook,
-    ll::memory::HookPriority::Normal,
-    NetEventCallback,
-    &NetEventCallback::$handle,
-    void,
-    NetworkIdentifier const& id,
-    PlayerSkinPacket const& pkt
-) {
-    if (!freeCamera::FreeCameraManager::getInstance().cachedSkinPacket.has_value()) {
-        freeCamera::FreeCameraManager::getInstance().cachedSkinPacket.emplace(pkt);
-        BDSE::getInstance().getSelf().getLogger().info("PlayerSkinPacket cached!");
-    }
-
-    origin(id, pkt);
-}*/
-
 LL_TYPE_INSTANCE_HOOK(
     PlayerAddLevelHook,
     ll::memory::HookPriority::Normal,

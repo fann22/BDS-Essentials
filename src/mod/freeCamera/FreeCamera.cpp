@@ -20,6 +20,7 @@
 #include "mc/world/level/Level.h"
 #include "mc/world/level/Tick.h"
 
+#include "gmlib/mc/network/BinaryStream.h"
 
 namespace bds_essentials::freeCamera {
 
@@ -38,14 +39,19 @@ void SendFakePlayerPacket(Player* pl) {
     pkt1.mUuid            = randomUuid;
     pl->sendNetworkPacket(pkt1);
 
-    if (FreeCameraManager::getInstance().cachedSkinPacket.has_value()) {
-        auto& val = FreeCameraManager::getInstance().cachedSkinPacket.value();
-        val.mUUID                 = randomUuid;
-        val.mSkin                 = *pl->mSkin;
-        val.mLocalizedNewSkinName = "";
-        val.mLocalizedOldSkinName = "";
-        val.sendTo(*pl);
-    }
+    auto skin = pl->mSkin.get();
+    gmlib::GMBinaryStream bs;
+    bs.writePacketHeader(MinecraftPacketIds::PlayerSkin);
+    bs.writeUuid(randomUuid);
+    bs.writeSkin(*skin);
+    bs.writeString("");
+    bs.writeString("");
+    bs.writeBool(true);
+    bs.sendTo(
+        *(gmlib::GMPlayer*)pl,
+        NetworkPeer::Reliability::ReliableOrdered,
+        Compressibility::Compressible
+    );
 }
 
 void DisableFreeCameraPacket(Player* pl) {

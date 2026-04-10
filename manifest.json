@@ -7,6 +7,9 @@
     "dependencies": [
         {
             "name": "iListenAttentively"
+        },
+        {
+            "name": "GMLIB"
         }
     ]
 }

@@ -2,6 +2,8 @@ add_rules("mode.debug", "mode.release")
 
 add_repositories("levimc-repo https://github.com/LiteLDev/xmake-repo.git")
 add_repositories("miracleforest-repo https://github.com/MiracleForest/xmake-repo.git")
+add_repositories("groupmountain-repo https://github.com/GroupMountain/xmake-repo.git")
+
 
 option("target_type")
     set_default("server")
@@ -15,6 +17,7 @@ option_end()
 add_requires("levilamina", {configs = {target_type = get_config("target_type")}})
 add_requires("levibuildscript")
 add_requires("ilistenattentively")
+add_requires("gmlib")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -25,7 +28,7 @@ target("BDS-Essentials") -- Change this to your mod name.
     add_rules("@levibuildscript/modpacker")
     add_cxflags( "/EHa", "/utf-8", "/W4", "/w44265", "/w44289", "/w44296", "/w45263", "/w44738", "/w45204")
     add_defines("NOMINMAX", "UNICODE")
-    add_packages("levilamina", "ilistenattentively")
+    add_packages("levilamina", "ilistenattentively", "gmlib")
     set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")
