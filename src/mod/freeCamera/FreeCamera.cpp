@@ -10,13 +10,12 @@
 #include "mc/network/ServerNetworkHandler.h"
 #include "mc/network/packet/AddPlayerPacket.h"
 #include "mc/network/packet/PlayerSkinPacket.h"
-#include "mc/network/packet/PlayerSkinPacketPayload.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/UpdateAbilitiesPacket.h"
 #include "mc/network/packet/UpdatePlayerGameTypePacket.h"
 #include "mc/platform/UUID.h"
 #include "mc/server/ServerPlayer.h"
-#include "mc/world/actor/Actor.h"
+#include "mc/world/actor/Actor.h "
 #include "mc/world/actor/player/SerializedSkinRef.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/Tick.h"
@@ -39,14 +38,14 @@ void SendFakePlayerPacket(Player* pl) {
     pkt1.mUuid            = randomUuid;
     pl->sendNetworkPacket(pkt1);
 
-    PlayerSkinPacketPayload payload;
-    payload.mUUID                 = randomUuid;
-    payload.mSkin                 = *pl->mSkin;
-    payload.mLocalizedNewSkinName = "";
-    payload.mLocalizedOldSkinName = "";
-
-    auto packet = std::make_unique<PlayerSkinPacket>(std::move(payload));
-    packet->sendTo(*pl);
+    if (FreeCameraManager::getInstance().cachedSkinPacket.has_value()) {
+        auto& val = FreeCameraManager::getInstance().cachedSkinPacket.value();
+        val.mUUID                 = randomUuid;
+        val.mSkin                 = *pl->mSkin;
+        val.mLocalizedNewSkinName = "";
+        val.mLocalizedOldSkinName = "";
+        val.sendTo(*pl);
+    }
 }
 
 void DisableFreeCameraPacket(Player* pl) {

@@ -60,6 +60,7 @@
 #include "mc/world/scores/ScoreboardId.h"
 #include "mc/world/scores/ScoreboardOperationResult.h"
 
+#include "mc/network/ServerNetworkHandler.h"
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/packet/ActorEventPacket.h"
 #include "mc/network/packet/TextPacket.h"
@@ -70,25 +71,20 @@
 namespace bds_essentials {
 
 LL_AUTO_TYPE_INSTANCE_HOOK(
-    PlayerSkinPacketHook,
+    ServerNetworkHandlerHook,
     ll::memory::HookPriority::Normal,
-    PlayerSkinPacket,
-    &PlayerSkinPacket::$_read,
-    ::Bedrock::Result<void>,
-    ::ReadOnlyBinaryStream& stream
+    ServerNetworkHandler,
+    &ServerNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const& id,
+    PlayerSkinPacket const& pkt
 ) {
-    auto result = origin(stream);
-
-    if (freeCamera::FreeCameraManager::getInstance().cachedSkinPacket == nullptr) {
-        auto* buf = reinterpret_cast<PlayerSkinPacket*>(
-            ::operator new(sizeof(PlayerSkinPacket))
-        );
-        std::memcpy(buf, this, sizeof(PlayerSkinPacket));
-        freeCamera::FreeCameraManager::getInstance().cachedSkinPacket = buf;
+    if (!freeCamera::FreeCameraManager::getInstance().cachedSkinPacket.has_value()) {
+        freeCamera::FreeCameraManager::getInstance().cachedSkinPacket.emplace(pkt);
         BDSE::getInstance().getSelf().getLogger().info("PlayerSkinPacket cached!");
     }
 
-    return result;
+    origin(id, pkt);
 }
 
 LL_TYPE_INSTANCE_HOOK(

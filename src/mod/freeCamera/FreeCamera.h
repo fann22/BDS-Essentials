@@ -10,7 +10,7 @@ namespace bds_essentials::freeCamera {
 class FreeCameraManager {
 public:
     std::unordered_set<unsigned long long> FreeCamList;
-    PlayerSkinPacket* cachedSkinPacket = nullptr;
+    std::optional<PlayerSkinPacket> cachedSkinPacket;
     static FreeCameraManager&              getInstance() {
         static FreeCameraManager instance;
         return instance;
