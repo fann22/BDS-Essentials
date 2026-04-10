@@ -29,6 +29,8 @@
 #include "ila/event/minecraft/world/actor/MobHealthChangeEvent.h"
 #include "ila/event/minecraft/world/level/block/FarmDecayEvent.h"
 
+#include "mc/platform/Result.h"
+#include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/shared_types/legacy/actor/ActorDamageCause.h"
 
 #include "mc/server/ServerInstance.h"
@@ -71,20 +73,22 @@ LL_TYPE_INSTANCE_HOOK(
     PlayerSkinPacketHook,
     ll::memory::HookPriority::Normal,
     PlayerSkinPacket,
-    &PlayerSkinPacket::$ctor,
-    void,
-    PlayerSkinPacket const&  pkt
+    &PlayerSkinPacket::$_read,
+    ::Bedrock::Result<void>,
+    ::ReadOnlyBinaryStream& stream
 ) {
+    auto result = origin(stream);
+
     if (freeCamera::FreeCameraManager::getInstance().cachedSkinPacket == nullptr) {
         auto* buf = reinterpret_cast<PlayerSkinPacket*>(
-            ::operator new(sizeof(&pkt))
+            ::operator new(sizeof(PlayerSkinPacket))
         );
-        std::memcpy(buf, &pkt, sizeof(&pkt));
+        std::memcpy(buf, this, sizeof(PlayerSkinPacket));
         freeCamera::FreeCameraManager::getInstance().cachedSkinPacket = buf;
-        BDSE::getInstance().getSelf().getLogger().info("PlayerSkinPacket have been cached!");
+        BDSE::getInstance().getSelf().getLogger().info("PlayerSkinPacket cached!");
     }
 
-    origin(pkt);
+    return result;
 }
 
 LL_TYPE_INSTANCE_HOOK(
