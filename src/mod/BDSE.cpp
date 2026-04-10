@@ -72,7 +72,7 @@
 
 namespace bds_essentials {
 
-LL_AUTO_TYPE_INSTANCE_HOOK(
+/*LL_AUTO_TYPE_INSTANCE_HOOK(
     ServerNetworkHandlerHook,
     ll::memory::HookPriority::Normal,
     ServerNetworkHandler,
@@ -103,7 +103,7 @@ LL_AUTO_TYPE_INSTANCE_HOOK(
     }
 
     origin(id, pkt);
-}
+}*/
 
 LL_TYPE_INSTANCE_HOOK(
     PlayerAddLevelHook,
@@ -321,7 +321,7 @@ bool BDSE::enable() {
                 result,
                 *id,
                 *mHealthObjective,
-                static_cast<int>(std::round(event.newValue() * 2.0f) / 2), 
+                static_cast<int>(std::ceil(event.newValue())), 
                 PlayerScoreSetFunction::Set
             );
         })
