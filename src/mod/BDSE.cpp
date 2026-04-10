@@ -268,32 +268,6 @@ bool BDSE::enable() {
 
     gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ila::mc::SendPacketBeforeEvent<TextPacket>>(
-            [](ila::mc::SendPacketBeforeEvent<TextPacket>& event) {
-                auto& packet = event.packet();
-                auto& body = *reinterpret_cast<std::variant<
-                    TextPacketPayload::MessageOnly,
-                    TextPacketPayload::AuthorAndMessage,
-                    TextPacketPayload::MessageAndParams
-                >*>(&packet.mBody);
-
-                if (auto* msg = std::get_if<TextPacketPayload::AuthorAndMessage>(&body)) {
-                    if (msg->mType == TextPacketType::Chat) {
-                        BDSE::getInstance().getSelf().getLogger().info(
-                            "{}: {}",
-                            msg->mAuthor.get(),
-                            msg->mMessage.get()
-                        );
-                        TextPacket::createRawMessage("§b" + msg->mAuthor.get() + "§f: " + msg->mMessage.get()).sendToClients();
-                        event.cancel();
-                    }
-                }
-            }
-        )
-    );
-
-    gListeners.insert(
-        gListeners.begin(),
         bus.emplaceListener<ll::event::PlayerJoinEvent>([this](ll::event::PlayerJoinEvent& event) {
             Player&              player  = event.self();
             BaseAttributeMap&    attrMap = const_cast<BaseAttributeMap&>(*player.getAttributes());
@@ -369,22 +343,17 @@ bool BDSE::enable() {
             }
         })
     );
-/*
+
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::PlayerChatEvent>([](ll::event::PlayerChatEvent& event) {
             BDSE::getInstance().getSelf().getLogger().info("{}: {}", event.self().getRealName(), event.message());
-            for (auto& [uuid, entry] : ll::service::getLevel()->getPlayerList()) {
-                Player* player = ll::service::getLevel()->getPlayer(uuid);
-                if (player) {
-                    auto message = "§b" + event.self().getRealName() + "§f: " + event.message();
-                    player->sendMessage(message);
-                }
-            }
+            auto message = "§b" + event.self().getRealName() + "§f: " + event.message();
+            TextPacket::createRawMessage(message).sendToClients();
             event.cancel();
         })
     );
-*/
+
     // getSelf().getLogger().info("loaded.");
     return true;
 }
