@@ -8,6 +8,9 @@
 #include "mc/world/level/ChunkPos.h"
 #include "mc/world/level/ChunkBlockPos.h"
 #include "mc/world/level/block/Block.h"
+#include "mc/world/level/dimension/Dimension.h"
+#include "mc/world/level/ChunkPos.h"
+#include "mc/world/level/ChunkLocalHeight.h"
 
 namespace mipmap {
 
@@ -168,10 +171,12 @@ public:
     explicit ChunkCollector(HttpSender& sender) : mSender(sender) {}
 
     void onChunkLoaded(LevelChunk& lc) {
-        int chunkX      = lc.mPosition.x;
-        int chunkZ      = lc.mPosition.z;
-        std::string dim = lc.mDimension.mName;
-        short minY      = lc.mDimension.mHeightRange.mMin;
+        ChunkPos const& pos = lc.mPosition;
+        Dimension& dim = lc.mDimension;
+        int chunkX = pos.x;
+        int chunkZ = pos.z;
+        std::string dimName = dim.mName;
+        short minY = dim.mHeightRange.mMin;
 
         // build JSON manual (hindari dependency nlohmann/json)
         std::string blocksJson = "[";
@@ -179,7 +184,8 @@ public:
 
         for (uchar lx = 0; lx < 16; lx++) {
             for (uchar lz = 0; lz < 16; lz++) {
-                ChunkLocalHeight height = lc.mHeightmap[lx + lz * 16];
+                auto const& heightmap = lc.mHeightmap;
+                ChunkLocalHeight height = heightmap[lx + lz * 16];
 
                 // scan dari atas ke bawah, skip blacklist
                 std::string blockName;
@@ -217,7 +223,7 @@ public:
             "\"chunkX\":" + std::to_string(chunkX) + ","
             "\"chunkZ\":" + std::to_string(chunkZ) + ","
             "\"chunk\":{"
-                "\"dimension\":\"" + dim + "\","
+                "\"dimension\":\"" + dimName + "\","
                 "\"blocks\":" + blocksJson +
             "}}";
 
