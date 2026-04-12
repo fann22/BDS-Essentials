@@ -176,7 +176,9 @@ public:
         int chunkX = pos.x;
         int chunkZ = pos.z;
         std::string dimName = dim.mName;
-        short minY = dim.mHeightRange.mMin;
+
+        DimensionHeightRange const& heightRange = dim.mHeightRange;
+        short minY = heightRange.mMin;
 
         // build JSON manual (hindari dependency nlohmann/json)
         std::string blocksJson = "[";
@@ -184,7 +186,7 @@ public:
 
         for (uchar lx = 0; lx < 16; lx++) {
             for (uchar lz = 0; lz < 16; lz++) {
-                auto const& heightmap = lc.mHeightmap;
+                std::array<ChunkLocalHeight, 256> const& heightmap = lc.mHeightmap;
                 ChunkLocalHeight height = heightmap[lx + lz * 16];
 
                 // scan dari atas ke bawah, skip blacklist

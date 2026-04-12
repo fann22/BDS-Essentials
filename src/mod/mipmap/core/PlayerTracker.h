@@ -1,10 +1,14 @@
 #pragma once
 #include "HttpSender.h"
+#include "mc/world/level/Level.h"
 #include "mc/world/actor/player/Player.h"
-#include "mc/world/actor/player/SkinImage.h"
+#include "mc/world/actor/player/ServerPlayer.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
-#include "mc/server/ServerPlayer.h"
-#include "ll/api/service/Bedrock.h"
+#include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/player/SkinImage.h"
+#include "mc/util/ThreadOwner.h"
+#include <ll/api/service/Bedrock.h>
+
 
 namespace mipmap {
 
@@ -21,7 +25,9 @@ public:
             auto* sp = static_cast<ServerPlayer*>(&player);
             if (!sp->mSkin) return true;
 
-            SerializedSkinImpl& skin = sp->mSkin->mSkinImpl->mObject;
+            SerializedSkinRef& skinRef = *sp->mSkin;         // deref unique_ptr
+            if (!skinRef.mSkinImpl) return true;
+            SerializedSkinImpl& skin = skinRef.mSkinImpl->mObject;  // ThreadOwner->mObject
             SkinImage const& skinImg = skin.mSkinImage;
 
             // convert pixel bytes ke hex string
@@ -44,7 +50,7 @@ public:
             std::string dim = player.getDimension().mName;
 
             // nama & xuid
-            std::string name = player.getName();
+            std::string name = player.getRealName();
             std::string xuid = player.getXuid();
 
             if (!first) playersJson += ",";

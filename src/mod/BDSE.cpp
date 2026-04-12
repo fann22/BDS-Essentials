@@ -385,6 +385,7 @@ bool BDSE::disable() {
     DisableAchievementsHook::unhook();
     PlayerAddLevelHook::unhook();
     MipMapChunkLoadHook::unhook();
+    mipmap::MipMap::getInstance().shutdown();
 
     auto& bus = ll::event::EventBus::getInstance();
 

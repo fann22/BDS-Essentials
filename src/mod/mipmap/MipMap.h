@@ -2,12 +2,12 @@
 #include "core/HttpSender.h"
 #include "core/ChunkCollector.h"
 #include "core/PlayerTracker.h"
-#include "ll/api/schedule/Scheduler.h"
-#include "ll/api/memory/Hook.h"
+#include "ll/api/thread/ServerThreadExecutor.h"
+#include "ll/api/chrono/GameChrono.h"
+#include <memory>
+#include <atomic>
 
 #include "mc/world/level/storage/DBChunkStorage.h"
-
-#include <memory>
 
 namespace mipmap {
 
@@ -40,22 +40,34 @@ public:
         mCollector     = std::make_unique<ChunkCollector>(*mSender);
         mPlayerTracker = std::make_unique<PlayerTracker>(*mSender);
 
-        // tick player tiap 5 detik (100 tick)
-        mScheduler.add<ll::schedule::RepeatTask>(
-            ll::chrono::ticks(100),
-            [this]() {
-                mPlayerTracker->tick();
-            }
-        );
+        schedulePlayerTick();
+    }
+
+    void shutdown() {
+        mRunning = false;
     }
 
     ChunkCollector& getCollector() { return *mCollector; }
 
 private:
+    void schedulePlayerTick() {
+        if (!mRunning) return;
+
+        // 5 detik = 5000ms
+        ll::thread::ServerThreadExecutor::getDefault().executeAfter(
+            [this]() {
+                if (!mRunning) return;
+                mPlayerTracker->tick();
+                schedulePlayerTick(); // reschedule
+            },
+            std::chrono::milliseconds(5000)
+        );
+    }
+
     std::unique_ptr<HttpSender>     mSender;
     std::unique_ptr<ChunkCollector> mCollector;
     std::unique_ptr<PlayerTracker>  mPlayerTracker;
-    ll::schedule::GameTickScheduler mScheduler;
+    std::atomic<bool>               mRunning{true};
 };
 
 } // namespace mipmap
