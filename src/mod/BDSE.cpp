@@ -202,7 +202,7 @@ static std::atomic<bool> gRunning   = false;
 
 bool BDSE::load() {
     // getSelf().getLogger().debug("Loading...");
-    // Code for loading the mod goes here.
+    mipmap::MipMap::getInstance().init();
     return true;
 }
 
@@ -265,6 +265,7 @@ bool BDSE::enable() {
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
     PlayerAddLevelHook::hook();
+    MipMapChunkLoadHook::hook();
 
     auto& bus = ll::event::EventBus::getInstance();
 
@@ -370,17 +371,6 @@ bool BDSE::enable() {
         })
     );
 
-    gListeners.insert(
-        gListeners.begin(),
-        bus.emplaceListener<ila::mc::SendPacketBeforeEvent<UpdateBlockPacket>>(
-            [](ila::mc::SendPacketBeforeEvent<UpdateBlockPacket>& event) {
-                UpdateBlockPacket& pkt = event.packet();
-
-                BDSE::getInstance().getSelf().getLogger().info("Sending packet with mRuntimeId: {}", pkt.mRuntimeId);
-            }
-        )
-    );
-
     // getSelf().getLogger().info("loaded.");
     return true;
 }
@@ -392,6 +382,7 @@ bool BDSE::disable() {
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
     PlayerAddLevelHook::unhook();
+    MipMapChunkLoadHook::unhook();
 
     auto& bus = ll::event::EventBus::getInstance();
 
