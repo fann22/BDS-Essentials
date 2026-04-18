@@ -4,6 +4,8 @@
 #include "freeCamera/FreeCamera.h"
 #include "gsl/pointers"
 
+#include "features/FastLeafDecay.h"
+
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
 #include "ll/api/io/LogLevel.h"
@@ -263,6 +265,7 @@ bool BDSE::enable() {
     mXPObjective = mScoreboard->addObjective("MostLVL", "•> Most Level <•", *criteria);
     mScoreboard->setDisplayObjective(Scoreboard::DISPLAY_SLOT_SIDEBAR(), *mXPObjective, ObjectiveSortOrder::Descending);
 
+    features::fast_leaf_decay::enable();
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
     PlayerAddLevelHook::hook();
@@ -378,6 +381,7 @@ bool BDSE::enable() {
 bool BDSE::disable() {
     gRunning = false;
 
+    features::fast_leaf_decay::disable();
     freeCamera::FreeCameraManager::freecameraHook(false);
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
