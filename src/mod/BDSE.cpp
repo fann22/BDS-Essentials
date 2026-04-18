@@ -355,7 +355,7 @@ bool BDSE::enable() {
                 PlaySoundPacket packet(PlaySoundPacketPayload(
                     "random.orb",
                     player->getPosition(),
-                    1.0f, // volume
+                    1.5f, // volume
                     1.2f  // pitch
                 ));
                 player->sendNetworkPacket(packet);
