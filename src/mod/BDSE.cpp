@@ -384,12 +384,12 @@ bool BDSE::enable() {
 
             // Contoh: sembunyikan diamond ore, kirim stone ke semua client
             if (newBlock.getTypeName() == "minecraft:glass") {
-                auto const& stone = Block::tryGetFromRegistry("minecraft:netherite_block");
+                auto const& stone = Block::tryGetFromRegistry(std::string_view("minecraft:netherite_block"));
                 if (!stone) return;
 
                 UpdateBlockPacket pkt;
                 pkt.mPos         = pos;
-                pkt.mRuntimeId   = stone.mSerializationIdHashForNetwork;
+                pkt.mRuntimeId   = (*stone).mSerializationIdHashForNetwork;
                 pkt.mLayer       = 0;
                 pkt.mUpdateFlags = 0b0011; // FLAG_NEIGHBORS | FLAG_NETWORK
                 pkt.sendToClients();
