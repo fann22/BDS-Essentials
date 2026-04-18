@@ -3,6 +3,7 @@
 
 #include "features/FastLeafDecay.h"
 
+#include "ll/api/base/Containers.h"
 #include "ll/api/memory/Hook.h"
 #include <ll/api/chrono/GameChrono.h>
 #include <ll/api/thread/ServerThreadExecutor.h>
@@ -25,7 +26,7 @@ static constexpr int DECAY_TICKS_MAX = 10;
 void addLeavesBlock(BlockSource& region, BlockPos const& pos);
 bool isLeaves(Block const& block);
 
-static ll::DenseMap<BlockPos, std::shared_ptr<ll::data::CancellableCallback>> gCallbacks;
+static ll::SmallDenseMap<BlockPos, std::shared_ptr<ll::data::CancellableCallback>> gCallbacks;
 
 LL_TYPE_INSTANCE_HOOK(
     LeavesBlockRemoveHook,
