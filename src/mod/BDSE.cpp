@@ -390,7 +390,7 @@ bool BDSE::enable() {
                 if (!replacement) return;
 
                 ll::thread::ServerThreadExecutor::getDefault().executeAfter(
-                    []() {
+                    [](){
                         UpdateBlockPacket pkt;
                         pkt.mPos         = pos;
                         pkt.mRuntimeId   = (*replacement).mSerializationIdHashForNetwork;
@@ -399,7 +399,7 @@ bool BDSE::enable() {
                         pkt.sendToClients();
                     },
                     ll::chrono::ticks(4)
-                )
+                );
             }
         })
     );
