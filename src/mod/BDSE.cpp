@@ -85,49 +85,50 @@
 #include <ll/api/thread/ServerThreadExecutor.h>
 
 namespace bds_essentials {
-/*
-LL_AUTO_TYPE_INSTANCE_HOOK(
-    NetEventCallbackHook,
-    ll::memory::HookPriority::Normal,
-    NetEventCallback,
-    &NetEventCallback::$handle,
-    void,
-    NetworkIdentifier const& id,
-    std::shared_ptr<UpdateBlockPacket> pkt
-) {
-    if (pkt) {
-        BDSE::getInstance().getSelf().getLogger().info("Sending packet with mRuntimeId: {}", pkt->mRuntimeId);
-        BlockTypeRegistry* blockReg = ll::service::getLevel()->getBlockTypeRegistry().get();
-        Block const& glass = blockReg->getDefaultBlockState("minecraft:glass");
-        if (pkt->mRuntimeId == glass.computeRawSerializationIdHashForNetwork()) {
-            Block const& dirt = blockReg->getDefaultBlockState("minecraft:dirt");
-            pkt->mRuntimeId = dirt.computeRawSerializationIdHashForNetwork();
+
+void drawChunkGrid(Player& player) {
+    Vec3 pos = player.getPosition();
+    Dimension* dim = &player.getDimension();
+    
+    int chunkX = (int)std::floor(pos.x / 16);
+    int chunkZ = (int)std::floor(pos.z / 16);
+
+    float startX = (chunkX * 16) - 0.5f;
+    float startZ = (chunkZ * 16) - 0.5f;
+    float minY = pos.y - 5.0f;
+    float maxY = pos.y + 5.0f;
+
+    int density = 16;
+    int verticalSteps = 10;
+
+    auto spawn = [&](Vec3 p) {
+        player.getLevel().spawnParticleEffect(
+            "minecraft:dragon_breath_trail",
+            p,
+            dim
+        );
+    };
+
+    for (int gz = 0; gz <= 8; gz++) {
+        float z = startZ + (gz * 2);
+        for (int yi = 0; yi <= verticalSteps; yi++) {
+            float y = minY + ((maxY - minY) * yi / verticalSteps);
+            for (int i = 0; i <= density; i++) {
+                spawn({ startX + (16.0f * i / density), y, z });
+            }
         }
     }
 
-    origin(id, pkt);
+    for (int gx = 0; gx <= 8; gx++) {
+        float x = startX + (gx * 2);
+        for (int yi = 0; yi <= verticalSteps; yi++) {
+            float y = minY + ((maxY - minY) * yi / verticalSteps);
+            for (int i = 0; i <= density; i++) {
+                spawn({ x, y, startZ + (16.0f * i / density) });
+            }
+        }
+    }
 }
-LL_AUTO_TYPE_INSTANCE_HOOK(
-    NetEventCallbackHook2,
-    ll::memory::HookPriority::Normal,
-    NetEventCallback,
-    &NetEventCallback::$handle,
-    void,
-    NetworkIdentifier const& id,
-    std::shared_ptr<UpdateBlockSyncedPacket> pkt
-) {
-    if (pkt) {
-        BDSE::getInstance().getSelf().getLogger().info("Sending packet with mRuntimeId: {}", pkt->mRuntimeId);
-        BlockTypeRegistry* blockReg = ll::service::getLevel()->getBlockTypeRegistry().get();
-        Block const& glass = blockReg->getDefaultBlockState("minecraft:glass");
-        if (pkt->mRuntimeId == glass.computeRawSerializationIdHashForNetwork()) {
-            Block const& dirt = blockReg->getDefaultBlockState("minecraft:dirt");
-            pkt->mRuntimeId = dirt.computeRawSerializationIdHashForNetwork();
-        }
-    }
-
-    origin(id, pkt);
-}*/
 
 LL_TYPE_INSTANCE_HOOK(
     PlayerAddLevelHook,
@@ -224,7 +225,7 @@ bool BDSE::enable() {
     });
     ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
         while (gRunning) {
-            level.forEachPlayer([](Player& player) -> bool {
+            ll::service::getLevel()->forEachPlayer([](Player& player) -> bool {
                 auto guid = player.getNetworkIdentifier().mGuid.g;
                 if (ChunkBorderList.count(guid)) drawChunkGrid(player);
                 return true;
@@ -420,11 +421,11 @@ bool BDSE::enable() {
             Block const&    newBlock = event.newBlock();
 
             if (newBlock.getTypeName() == "minecraft:glass") {
-                auto const& replacement = Block::tryGetFromRegistry(std::string_view("minecraft:netherite_block"));
+                auto const& replacement = Block::tryGetFromRegistry(std::string_view("glass:regular"));
                 if (!replacement) return;
 
                 ll::thread::ServerThreadExecutor::getDefault().executeAfter(
-                    [](){
+                    [&pos, &replacement](){
                         UpdateBlockPacket pkt;
                         pkt.mPos         = pos;
                         pkt.mRuntimeId   = (*replacement).mSerializationIdHashForNetwork;
@@ -465,50 +466,6 @@ bool BDSE::disable() {
     mXPObjective     = nullptr;
 
     return true;
-}
-
-void drawChunkGrid(Player& player) {
-    Vec3 pos = player.getPosition();
-    Dimension* dim = &player.getDimension();
-    
-    int chunkX = (int)std::floor(pos.x / 16);
-    int chunkZ = (int)std::floor(pos.z / 16);
-
-    float startX = (chunkX * 16) - 0.5f;
-    float startZ = (chunkZ * 16) - 0.5f;
-    float minY = pos.y - 5.0f;
-    float maxY = pos.y + 5.0f;
-
-    int density = 16;
-    int verticalSteps = 10;
-
-    auto spawn = [&](Vec3 p) {
-        player.getLevel().spawnParticleEffect(
-            "minecraft:dragon_breath_trail",
-            p,
-            dim
-        );
-    };
-
-    for (int gz = 0; gz <= 8; gz++) {
-        float z = startZ + (gz * 2);
-        for (int yi = 0; yi <= verticalSteps; yi++) {
-            float y = minY + ((maxY - minY) * yi / verticalSteps);
-            for (int i = 0; i <= density; i++) {
-                spawn({ startX + (16.0f * i / density), y, z });
-            }
-        }
-    }
-
-    for (int gx = 0; gx <= 8; gx++) {
-        float x = startX + (gx * 2);
-        for (int yi = 0; yi <= verticalSteps; yi++) {
-            float y = minY + ((maxY - minY) * yi / verticalSteps);
-            for (int i = 0; i <= density; i++) {
-                spawn({ x, y, startZ + (16.0f * i / density) });
-            }
-        }
-    }
 }
 
 } // namespace bds_essentials
