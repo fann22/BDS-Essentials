@@ -208,6 +208,7 @@ static std::vector<std::string> gMotdMessages = {
 };
 static std::atomic<int>  gMotdIndex = 0;
 static std::atomic<bool> gRunning   = false;
+static std::unordered_set<unsigned long long> ChunkBorderList;
 
 bool BDSE::load() {
     // getSelf().getLogger().debug("Loading...");
@@ -222,9 +223,19 @@ bool BDSE::enable() {
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
         }
     });
+    ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
+        while (gRunning) {
+            level.forEachPlayer([](Player& player) -> bool {
+                auto guid = player->getNetworkIdentifier().mGuid.g;
+                if (ChunkBorderList.count(guid)) drawChunkGrid(player);
+                return true;
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        }
+    });
 
     freeCamera::FreeCameraManager::freecameraHook(true);
-    auto& cmd = ll::command::CommandRegistrar::getInstance(false).getOrCreateCommand("freecamera", "Toggle freecam");
+    auto& cmd = ll::command::CommandRegistrar::getInstance(false).getOrCreateCommand("freecamera", "Toggle freecam.");
     ll::service::getCommandRegistry()->registerAlias("freecamera", "fc");
     cmd.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
             auto entity = origin.getEntity();
@@ -244,6 +255,30 @@ bool BDSE::enable() {
             } else {
                 freeCamera::FreeCameraManager::DisableFreeCamera(player);
                 output.success("FreeCamera disabled.");
+            }
+            return;
+        }
+    );
+    auto& cmd2 = ll::command::CommandRegistrar::getInstance(false).getOrCreateCommand("chunkborder", "Toggle chunk border.");
+    ll::service::getCommandRegistry()->registerAlias("chunkborder", "cb");
+    cmd2.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
+            auto entity = origin.getEntity();
+            if (entity == nullptr || !entity->isType(ActorType::Player)) {
+                output.error("Only players can run this command.");
+                return;
+            }
+            auto* player = ll::service::getLevel()->getPlayer(entity->getOrCreateUniqueID());
+            if (!player) {
+                output.error("Didn't found the target player.");
+                return;
+            }
+            auto guid = player->getNetworkIdentifier().mGuid.g;
+            if (!ChunkBorderList.count(guid)) {
+                ChunkBorderList.insert(guid);
+                output.success("Chunk border enabled.");
+            } else {
+                ChunkBorderList.erase(guid);
+                output.success("Chunk border disabled.");
             }
             return;
         }
@@ -431,6 +466,41 @@ bool BDSE::disable() {
     mXPObjective     = nullptr;
 
     return true;
+}
+
+void drawChunkGrid(Player& player, int density = 16, int heightRange = 5) {
+    Vec3 pos = player.getPosition();
+    int chunkX = (int)std::floor(pos.x / 16);
+    int chunkZ = (int)std::floor(pos.z / 16);
+
+    float startX = (chunkX * 16) - 0.5f;
+    float startZ = (chunkZ * 16) - 0.5f;
+    float minY = pos.y - heightRange;
+    float maxY = pos.y + heightRange;
+
+    int verticalSteps = heightRange * 2; // 1 particle per block secara vertikal
+
+    // Lines sepanjang X (fixed Z)
+    for (int gz = 0; gz <= 8; gz++) {
+        float z = startZ + (gz * 2);
+        for (int yi = 0; yi <= verticalSteps; yi++) {
+            float y = minY + ((maxY - minY) * yi / verticalSteps);
+            for (int i = 0; i <= density; i++) {
+                spawnParticle({ startX + (16.0f * i / density), y, z }, player);
+            }
+        }
+    }
+
+    // Lines sepanjang Z (fixed X)
+    for (int gx = 0; gx <= 8; gx++) {
+        float x = startX + (gx * 2);
+        for (int yi = 0; yi <= verticalSteps; yi++) {
+            float y = minY + ((maxY - minY) * yi / verticalSteps);
+            for (int i = 0; i <= density; i++) {
+                spawnParticle({ x, y, startZ + (16.0f * i / density) }, player);
+            }
+        }
+    }
 }
 
 } // namespace bds_essentials
