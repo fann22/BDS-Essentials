@@ -225,7 +225,7 @@ bool BDSE::enable() {
     ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
         while (gRunning) {
             level.forEachPlayer([](Player& player) -> bool {
-                auto guid = player->getNetworkIdentifier().mGuid.g;
+                auto guid = player.getNetworkIdentifier().mGuid.g;
                 if (ChunkBorderList.count(guid)) drawChunkGrid(player);
                 return true;
             });
