@@ -118,26 +118,6 @@ void removeChunkBorder(Player& player) {
     gShapeIds.erase(guid);
 }
 
-void sendLineToPlayer(Player& player, Vec3 const& begin, Vec3 const& end, mce::Color const& color = mce::Color::RED()) {
-    auto guid = player.getNetworkIdentifier().mGuid.g;
-    auto id   = sNextShapeId.fetch_sub(1);
-
-    DebugDrawerPacket pkt;
-    pkt.setSerializationMode(SerializationMode::CerealOnly);
-
-    ShapeDataPayload shape;
-    shape.mNetworkId        = id;
-    shape.mShapeType        = ScriptModuleDebugUtilities::ScriptDebugShapeType::Line;
-    shape.mLocation         = begin;
-    shape.mColor            = color;
-    shape.mDimensionId      = player.getDimension().mId;
-    shape.mExtraDataPayload = LineDataPayload{.mEndLocation = end};
-    pkt.mShapes->emplace_back(std::move(shape));
-
-    pkt.sendTo(player);
-    gShapeIds[guid].push_back(id);
-}
-
 void updateChunkBorder(Player& player) {
     Vec3 pos   = player.getPosition();
     int chunkX = (int)std::floor(pos.x / 16);
@@ -151,27 +131,52 @@ void updateChunkBorder(Player& player) {
     removeChunkBorder(player);
     gLastChunk[guid] = {chunkX, chunkZ};
 
-    float minX = (chunkX * 16) - 0.5f;
-    float minZ = (chunkZ * 16) - 0.5f;
-    float maxX = (chunkX * 16) + 16.5f;
-    float maxZ = (chunkZ * 16) + 16.5f;
-    float minY = pos.y - 5.0f;
-    float maxY = pos.y + 5.0f;
+    float minX = (chunkX * 16);
+    float minZ = (chunkZ * 16);
+    float maxX = (chunkX * 16) + 16.0f;
+    float maxZ = (chunkZ * 16) + 16.0f;
+    float minY = -64.0f;
+    float maxY = 320.0f;
 
-    sendLineToPlayer(player, {minX, minY, minZ}, {minX, maxY, minZ});
-    sendLineToPlayer(player, {maxX, minY, minZ}, {maxX, maxY, minZ});
-    sendLineToPlayer(player, {minX, minY, maxZ}, {minX, maxY, maxZ});
-    sendLineToPlayer(player, {maxX, minY, maxZ}, {maxX, maxY, maxZ});
+    auto dimId = player.getDimension().mId;
 
-    sendLineToPlayer(player, {minX, maxY, minZ}, {maxX, maxY, minZ});
-    sendLineToPlayer(player, {minX, maxY, maxZ}, {maxX, maxY, maxZ});
-    sendLineToPlayer(player, {minX, maxY, minZ}, {minX, maxY, maxZ});
-    sendLineToPlayer(player, {maxX, maxY, minZ}, {maxX, maxY, maxZ});
+    DebugDrawerPacket pkt;
+    pkt.setSerializationMode(SerializationMode::CerealOnly);
 
-    sendLineToPlayer(player, {minX, minY, minZ}, {maxX, minY, minZ});
-    sendLineToPlayer(player, {minX, minY, maxZ}, {maxX, minY, maxZ});
-    sendLineToPlayer(player, {minX, minY, minZ}, {minX, minY, maxZ});
-    sendLineToPlayer(player, {maxX, minY, minZ}, {maxX, minY, maxZ});
+    auto addLine = [&](Vec3 const& begin, Vec3 const& end) {
+        auto id = sNextShapeId.fetch_sub(1);
+        ShapeDataPayload shape;
+        shape.mNetworkId        = id;
+        shape.mShapeType        = ScriptModuleDebugUtilities::ScriptDebugShapeType::Line;
+        shape.mLocation         = begin;
+        shape.mColor            = mce::Color::RED();
+        shape.mDimensionId      = dimId;
+        shape.mExtraDataPayload = LineDataPayload{.mEndLocation = end};
+        pkt.mShapes->emplace_back(std::move(shape));
+        gShapeIds[guid].push_back(id);
+    };
+
+    // North & South (sweep X)
+    for (float x = minX; x <= maxX; x += 2.0f) {
+        addLine({x, minY, minZ}, {x, maxY, minZ}); // North
+        addLine({x, minY, maxZ}, {x, maxY, maxZ}); // South
+    }
+
+    // West & East (sweep Z)
+    for (float z = minZ; z <= maxZ; z += 2.0f) {
+        addLine({minX, minY, z}, {minX, maxY, z}); // West
+        addLine({maxX, minY, z}, {maxX, maxY, z}); // East
+    }
+
+    // Horizontal rings every 2 block (full height)
+    for (float y = minY; y <= maxY; y += 2.0f) {
+        addLine({minX, y, minZ}, {maxX, y, minZ}); // North
+        addLine({minX, y, maxZ}, {maxX, y, maxZ}); // South
+        addLine({minX, y, minZ}, {minX, y, maxZ}); // West
+        addLine({maxX, y, minZ}, {maxX, y, maxZ}); // East
+    }
+
+    pkt.sendTo(player);
 }
 
 LL_TYPE_INSTANCE_HOOK(
