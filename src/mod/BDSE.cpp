@@ -84,45 +84,93 @@
 #include <ll/api/chrono/GameChrono.h>
 #include <ll/api/thread/ServerThreadExecutor.h>
 
+#include "mc/network/packet/DebugDrawerPacket.h"
+#include "mc/network/packet/ShapeDataPayload.h"
+#include "mc/network/packet/LineDataPayload.h"
+#include "mc/scripting/modules/minecraft/debugdrawer/ScriptDebugShapeType.h"
+#include "mc/network/packet/cerealize/core/SerializationMode.h"
+
 namespace bds_essentials {
 
-void drawChunkBorder(Player& player) {
-    Vec3 pos = player.getPosition();
-    
+ShapeDataPayload::ShapeDataPayload() { mNetworkId = 0; }
+
+static std::atomic<uint64_t> sNextShapeId{UINT64_MAX};
+static std::unordered_map<unsigned long long, std::pair<int,int>>        gLastChunk;
+static std::unordered_map<unsigned long long, std::vector<uint64_t>>     gShapeIds;
+
+void removeChunkBorder(Player& player) {
+    auto guid = player.getNetworkIdentifier().mGuid.g;
+    auto it   = gShapeIds.find(guid);
+    if (it == gShapeIds.end()) return;
+
+    DebugDrawerPacket pkt;
+    pkt.setSerializationMode(SerializationMode::CerealOnly);
+
+    for (auto& id : it->second) {
+        ShapeDataPayload shape;
+        shape.mNetworkId = id;
+        shape.mShapeType = std::nullopt;
+        pkt.mShapes->emplace_back(std::move(shape));
+    }
+
+    pkt.sendTo(player);
+    gShapeIds.erase(guid);
+}
+
+void sendLineToPlayer(Player& player, Vec3 const& begin, Vec3 const& end, mce::Color const& color = mce::Color::RED()) {
+    auto guid = player.getNetworkIdentifier().mGuid.g;
+    auto id   = sNextShapeId.fetch_sub(1);
+
+    DebugDrawerPacket pkt;
+    pkt.setSerializationMode(SerializationMode::CerealOnly);
+
+    ShapeDataPayload shape;
+    shape.mNetworkId        = id;
+    shape.mShapeType        = ScriptModuleDebugUtilities::ScriptDebugShapeType::Line;
+    shape.mLocation         = begin;
+    shape.mColor            = color;
+    shape.mDimensionId      = player.getDimension().getDimensionId();
+    shape.mExtraDataPayload = LineDataPayload{.mEndLocation = end};
+    pkt.mShapes->emplace_back(std::move(shape));
+
+    pkt.sendTo(player);
+    gShapeIds[guid].push_back(id);
+}
+
+void updateChunkBorder(Player& player) {
+    Vec3 pos   = player.getPosition();
     int chunkX = (int)std::floor(pos.x / 16);
     int chunkZ = (int)std::floor(pos.z / 16);
 
-    float minX = (chunkX * 16) - 0.0f;
-    float minZ = (chunkZ * 16) - 0.0f;
-    float maxX = (chunkX * 16) + 16.0f;
-    float maxZ = (chunkZ * 16) + 16.0f;
+    auto guid = player.getNetworkIdentifier().mGuid.g;
+
+    auto it = gLastChunk.find(guid);
+    if (it != gLastChunk.end() && it->second == std::make_pair(chunkX, chunkZ)) return;
+
+    removeChunkBorder(player);
+    gLastChunk[guid] = {chunkX, chunkZ};
+
+    float minX = (chunkX * 16) - 0.5f;
+    float minZ = (chunkZ * 16) - 0.5f;
+    float maxX = (chunkX * 16) + 16.5f;
+    float maxZ = (chunkZ * 16) + 16.5f;
     float minY = pos.y - 5.0f;
     float maxY = pos.y + 5.0f;
 
-    int density       = 16;
-    int verticalSteps = 10;
+    sendLineToPlayer(player, {minX, minY, minZ}, {minX, maxY, minZ});
+    sendLineToPlayer(player, {maxX, minY, minZ}, {maxX, maxY, minZ});
+    sendLineToPlayer(player, {minX, minY, maxZ}, {minX, maxY, maxZ});
+    sendLineToPlayer(player, {maxX, minY, maxZ}, {maxX, maxY, maxZ});
 
-    auto spawn = [&](Vec3 p) {
-        player.getLevel().spawnParticleEffect(
-            "minecraft:endrod", p, &player.getDimension()
-        );
-    };
+    sendLineToPlayer(player, {minX, maxY, minZ}, {maxX, maxY, minZ});
+    sendLineToPlayer(player, {minX, maxY, maxZ}, {maxX, maxY, maxZ});
+    sendLineToPlayer(player, {minX, maxY, minZ}, {minX, maxY, maxZ});
+    sendLineToPlayer(player, {maxX, maxY, minZ}, {maxX, maxY, maxZ});
 
-    for (int yi = 0; yi <= verticalSteps; yi++) {
-        float y = minY + ((maxY - minY) * yi / verticalSteps);
-
-        for (int i = 0; i <= density; i++)
-            spawn({ minX + (maxX - minX) * i / density, y, minZ });
-
-        for (int i = 0; i <= density; i++)
-            spawn({ minX + (maxX - minX) * i / density, y, maxZ });
-
-        for (int i = 0; i <= density; i++)
-            spawn({ minX, y, minZ + (maxZ - minZ) * i / density });
-
-        for (int i = 0; i <= density; i++)
-            spawn({ maxX, y, minZ + (maxZ - minZ) * i / density });
-    }
+    sendLineToPlayer(player, {minX, minY, minZ}, {maxX, minY, minZ});
+    sendLineToPlayer(player, {minX, minY, maxZ}, {maxX, minY, maxZ});
+    sendLineToPlayer(player, {minX, minY, minZ}, {minX, minY, maxZ});
+    sendLineToPlayer(player, {maxX, minY, minZ}, {maxX, minY, maxZ});
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -224,7 +272,7 @@ bool BDSE::enable() {
                 ll::service::getLevel()->forEachPlayer([](Player& player) -> bool {
                     try {
                         auto guid = player.getNetworkIdentifier().mGuid.g;
-                        if (ChunkBorderList.count(guid)) drawChunkBorder(player);
+                        if (ChunkBorderList.count(guid)) updateChunkBorder(player);
                     } catch (std::exception& e) {
                         BDSE::getInstance().getSelf().getLogger().error("drawChunkGrid: {}", e.what());
                     }
@@ -232,7 +280,7 @@ bool BDSE::enable() {
                 });
             });
     
-            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     });
 
@@ -277,9 +325,13 @@ bool BDSE::enable() {
             auto guid = player->getNetworkIdentifier().mGuid.g;
             if (!ChunkBorderList.count(guid)) {
                 ChunkBorderList.insert(guid);
+                updateChunkBorder(*player);
                 output.success("Chunk border enabled.");
             } else {
                 ChunkBorderList.erase(guid);
+                removeChunkBorder(*player);
+                gLastChunk.erase(guid);
+                gShapeIds.erase(guid);
                 output.success("Chunk border disabled.");
             }
             return;
@@ -349,6 +401,10 @@ bool BDSE::enable() {
         bus.emplaceListener<ll::event::PlayerDisconnectEvent>([this](ll::event::PlayerDisconnectEvent& event) {
             ScoreboardId const* id = getOrCreateScoreboardId(event.self());
             if (id != nullptr) mScoreboard->resetPlayerScore(*id);
+            auto guid = event.self().getNetworkIdentifier().mGuid.g;
+            removeChunkBorder(event.self());
+            gLastChunk.erase(guid);
+            gShapeIds.erase(guid);
         })
     );
 
@@ -427,7 +483,7 @@ bool BDSE::enable() {
                 if (!replacement) return;
 
                 ll::thread::ServerThreadExecutor::getDefault().executeAfter(
-                    [pos, &replacement](){
+                    [pos, replacement](){
                         UpdateBlockPacket pkt;
                         pkt.mPos         = pos;
                         pkt.mRuntimeId   = (*replacement).mSerializationIdHashForNetwork;
