@@ -104,7 +104,7 @@ void drawChunkBorder(Player& player) {
 
     auto spawn = [&](Vec3 p) {
         player.getLevel().spawnParticleEffect(
-            "minecraft:witchspell", p, &player.getDimension()
+            "minecraft:endrod", p, &player.getDimension()
         );
     };
 
