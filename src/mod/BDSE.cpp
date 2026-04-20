@@ -224,7 +224,7 @@ bool BDSE::enable() {
                 ll::service::getLevel()->forEachPlayer([](Player& player) -> bool {
                     try {
                         auto guid = player.getNetworkIdentifier().mGuid.g;
-                        if (ChunkBorderList.count(guid)) drawChunkGrid(player);
+                        if (ChunkBorderList.count(guid)) drawChunkBorder(player);
                     } catch (std::exception& e) {
                         BDSE::getInstance().getSelf().getLogger().error("drawChunkGrid: {}", e.what());
                     }
