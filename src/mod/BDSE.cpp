@@ -94,8 +94,8 @@ void drawChunkBorder(Player& player) {
 
     float minX = (chunkX * 16) - 0.0f;
     float minZ = (chunkZ * 16) - 0.0f;
-    float maxX = (chunkX * 16) + 16f;
-    float maxZ = (chunkZ * 16) + 16f;
+    float maxX = (chunkX * 16) + 16.0f;
+    float maxZ = (chunkZ * 16) + 16.0f;
     float minY = pos.y - 5.0f;
     float maxY = pos.y + 5.0f;
 
