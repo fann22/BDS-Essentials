@@ -485,7 +485,7 @@ bool BDSE::enable() {
             Block const&    newBlock = event.newBlock();
 
             if (newBlock.getTypeName() == "minecraft:glass") {
-                auto const& replacement = Block::tryGetFromRegistry(std::string_view("glass:regular"));
+                auto const& replacement = Block::tryGetFromRegistry(std::string_view("minecraft:netherite_block"));
                 if (!replacement) return;
 
                 ll::thread::ServerThreadExecutor::getDefault().executeAfter(
