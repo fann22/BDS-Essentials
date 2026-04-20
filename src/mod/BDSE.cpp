@@ -485,19 +485,41 @@ bool BDSE::enable() {
             Block const&    newBlock = event.newBlock();
 
             if (newBlock.getTypeName() == "minecraft:glass") {
-                auto const& replacement = Block::tryGetFromRegistry(std::string_view("minecraft:netherite_block"));
+                auto const& replacement = Block::tryGetFromRegistry(std::string_view("glass:regular"));
                 if (!replacement) return;
 
                 ll::thread::ServerThreadExecutor::getDefault().executeAfter(
                     [pos, replacement](){
                         UpdateBlockPacket pkt;
                         pkt.mPos         = pos;
-                        pkt.mRuntimeId   = (*replacement).computeRawSerializationIdHashForNetwork();
                         pkt.mLayer       = 0;
                         pkt.mUpdateFlags = 0b0011; // FLAG_NEIGHBORS | FLAG_NETWORK
+                        pkt.mRuntimeId   = (*replacement).mSerializationIdHashForNetwork;
                         pkt.sendToClients();
                     },
                     ll::chrono::ticks(4)
+                );
+                ll::thread::ServerThreadExecutor::getDefault().executeAfter(
+                    [pos, replacement](){
+                        UpdateBlockPacket pkt;
+                        pkt.mPos         = pos;
+                        pkt.mLayer       = 0;
+                        pkt.mUpdateFlags = 0b0011; // FLAG_NEIGHBORS | FLAG_NETWORK
+                        pkt.mRuntimeId   = (*replacement).mSerializationIdHash;
+                        pkt.sendToClients();
+                    },
+                    ll::chrono::ticks(24)
+                );
+                ll::thread::ServerThreadExecutor::getDefault().executeAfter(
+                    [pos, replacement](){
+                        UpdateBlockPacket pkt;
+                        pkt.mPos         = pos;
+                        pkt.mLayer       = 0;
+                        pkt.mUpdateFlags = 0b0011; // FLAG_NEIGHBORS | FLAG_NETWORK
+                        pkt.mRuntimeId   = (*replacement).mNetworkId;
+                        pkt.sendToClients();
+                    },
+                    ll::chrono::ticks(48)
                 );
             }
         })
