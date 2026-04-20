@@ -86,47 +86,42 @@
 
 namespace bds_essentials {
 
-void drawChunkGrid(Player& player) {
+void drawChunkBorder(Player& player) {
     Vec3 pos = player.getPosition();
-    Dimension* dim = &player.getDimension();
     
     int chunkX = (int)std::floor(pos.x / 16);
     int chunkZ = (int)std::floor(pos.z / 16);
 
-    float startX = (chunkX * 16) - 0.5f;
-    float startZ = (chunkZ * 16) - 0.5f;
+    float minX = (chunkX * 16) - 0.5f;
+    float minZ = (chunkZ * 16) - 0.5f;
+    float maxX = (chunkX * 16) + 16.5f;
+    float maxZ = (chunkZ * 16) + 16.5f;
     float minY = pos.y - 5.0f;
     float maxY = pos.y + 5.0f;
 
-    int density = 16;
+    int density       = 64;
     int verticalSteps = 10;
 
     auto spawn = [&](Vec3 p) {
         player.getLevel().spawnParticleEffect(
-            "minecraft:dragon_breath_trail",
-            p,
-            dim
+            "minecraft:obsidian_tear_particle", p, &player.getDimension()
         );
     };
 
-    for (int gz = 0; gz <= 8; gz++) {
-        float z = startZ + (gz * 2);
-        for (int yi = 0; yi <= verticalSteps; yi++) {
-            float y = minY + ((maxY - minY) * yi / verticalSteps);
-            for (int i = 0; i <= density; i++) {
-                spawn({ startX + (16.0f * i / density), y, z });
-            }
-        }
-    }
+    for (int yi = 0; yi <= verticalSteps; yi++) {
+        float y = minY + ((maxY - minY) * yi / verticalSteps);
 
-    for (int gx = 0; gx <= 8; gx++) {
-        float x = startX + (gx * 2);
-        for (int yi = 0; yi <= verticalSteps; yi++) {
-            float y = minY + ((maxY - minY) * yi / verticalSteps);
-            for (int i = 0; i <= density; i++) {
-                spawn({ x, y, startZ + (16.0f * i / density) });
-            }
-        }
+        for (int i = 0; i <= density; i++)
+            spawn({ minX + (maxX - minX) * i / density, y, minZ });
+
+        for (int i = 0; i <= density; i++)
+            spawn({ minX + (maxX - minX) * i / density, y, maxZ });
+
+        for (int i = 0; i <= density; i++)
+            spawn({ minX, y, minZ + (maxZ - minZ) * i / density });
+
+        for (int i = 0; i <= density; i++)
+            spawn({ maxX, y, minZ + (maxZ - minZ) * i / density });
     }
 }
 
