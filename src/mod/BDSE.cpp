@@ -176,7 +176,7 @@ void updateChunkBorder(Player& player) {
     pkt.sendTo(player);
 }
 
-// Spawns a detached thread that updates chunk borders every 150 ms.
+// Spawns a detached thread that updates chunk borders every 40 ms.
 // The thread exits automatically when gChunkBorderCount drops to 0.
 void startChunkBorderLoop() {
     ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
@@ -198,7 +198,7 @@ void startChunkBorderLoop() {
                     }
                 }
             });
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
         }
     });
 }
