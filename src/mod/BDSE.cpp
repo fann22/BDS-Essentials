@@ -321,21 +321,21 @@ bool BDSE::enable() {
     cmd.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
         auto entity = origin.getEntity();
         if (entity == nullptr || !entity->isType(ActorType::Player)) {
-            output.error("Only players can run this command.");
+            output.error("§4Only players can run this command.");
             return;
         }
         auto* player = ll::service::getLevel()->getPlayer(entity->getOrCreateUniqueID());
         if (!player) {
-            output.error("Didn't found the target player.");
+            output.error("§4Didn't found the target player.");
             return;
         }
         auto guid = player->getNetworkIdentifier().mGuid.g;
         if (!freeCamera::FreeCameraManager::getInstance().FreeCamList.count(guid)) {
             freeCamera::FreeCameraManager::EnableFreeCamera(player);
-            output.success("FreeCamera enabled.");
+            output.success("§nFree Camera§r §aenabled.");
         } else {
             freeCamera::FreeCameraManager::DisableFreeCamera(player);
-            output.success("FreeCamera disabled.");
+            output.success("§nFree Camera§r §4disabled.");
         }
         return;
     });
@@ -345,12 +345,12 @@ bool BDSE::enable() {
     cmd2.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
         auto entity = origin.getEntity();
         if (entity == nullptr || !entity->isType(ActorType::Player)) {
-            output.error("Only players can run this command.");
+            output.error("§4Only players can run this command.");
             return;
         }
         auto* player = ll::service::getLevel()->getPlayer(entity->getOrCreateUniqueID());
         if (!player) {
-            output.error("Didn't found the target player.");
+            output.error("§4Didn't found the target player.");
             return;
         }
         auto guid = player->getNetworkIdentifier().mGuid.g;
@@ -362,7 +362,7 @@ bool BDSE::enable() {
             }
             if (++gChunkBorderCount == 1) startChunkBorderLoop();
             updateChunkBorder(*player);
-            output.success("Chunk border enabled.");
+            output.success("§nChunk border§r §aenabled.");
         } else {
             {
                 std::lock_guard lock(gChunkBorderMtx);
@@ -373,7 +373,7 @@ bool BDSE::enable() {
             // Decrement after erasing — loop thread sees count drop to 0 and exits.
             --gChunkBorderCount;
             removeChunkBorder(*player);
-            output.success("Chunk border disabled.");
+            output.success("§nChunk border§r §4disabled.");
         }
         return;
     });
