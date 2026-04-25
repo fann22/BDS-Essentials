@@ -94,17 +94,33 @@ static std::mutex                                                    gChunkBorde
 
 // Counts players with chunk border active.
 // The loop thread checks this — when it hits 0, the thread exits naturally.
-static std::atomic<int> gChunkBorderCount{0};
+static std::atomic<int>  gChunkBorderCount{0};
 
+// FIX #1: flag to prevent spawning duplicate loop threads.
+// compare_exchange_strong ensures only one thread can transition false→true.
+static std::atomic<bool> gLoopRunning{false};
+
+// removeChunkBorder — must be called BEFORE erasing gShapeIds[guid].
+// Caller is responsible for holding gChunkBorderMtx if accessing shared maps
+// outside of server thread, or ensuring single-threaded access.
 void removeChunkBorder(Player& player) {
     auto guid = player.getNetworkIdentifier().mGuid.g;
-    auto it   = gShapeIds.find(guid);
+
+    // FIX #3: lock before accessing gShapeIds to prevent data race with
+    // command handler or disconnect handler running on another thread.
+    std::unique_lock lock(gChunkBorderMtx);
+    auto it = gShapeIds.find(guid);
     if (it == gShapeIds.end()) return;
+
+    // Copy IDs out, then release lock before doing packet I/O.
+    std::vector<uint64_t> ids = it->second;
+    gShapeIds.erase(it);
+    lock.unlock();
 
     DebugDrawerPacket pkt;
     pkt.setSerializationMode(SerializationMode::CerealOnly);
 
-    for (auto& id : it->second) {
+    for (auto& id : ids) {
         ShapeDataPayload shape;
         shape.mNetworkId = id;
         shape.mShapeType = std::nullopt; // nullopt = delete shape
@@ -112,7 +128,6 @@ void removeChunkBorder(Player& player) {
     }
 
     pkt.sendTo(player);
-    gShapeIds.erase(guid);
 }
 
 void updateChunkBorder(Player& player) {
@@ -121,12 +136,17 @@ void updateChunkBorder(Player& player) {
     int  chunkZ = (int)std::floor(pos.z / 16);
     auto guid   = player.getNetworkIdentifier().mGuid.g;
 
-    // Skip redraw if still in the same chunk.
-    auto it = gLastChunk.find(guid);
-    if (it != gLastChunk.end() && it->second == std::make_pair(chunkX, chunkZ)) return;
+    // lock gLastChunk access — it can be written by command handler
+    // (disable path) concurrently.
+    {
+        std::lock_guard lock(gChunkBorderMtx);
+        auto it = gLastChunk.find(guid);
+        if (it != gLastChunk.end() && it->second == std::make_pair(chunkX, chunkZ)) return;
+        gLastChunk[guid] = {chunkX, chunkZ};
+    }
 
+    // removeChunkBorder acquires its own lock internally.
     removeChunkBorder(player);
-    gLastChunk[guid] = {chunkX, chunkZ};
 
     float minX = (chunkX * 16);
     float minZ = (chunkZ * 16);
@@ -140,6 +160,9 @@ void updateChunkBorder(Player& player) {
     DebugDrawerPacket pkt;
     pkt.setSerializationMode(SerializationMode::CerealOnly);
 
+    // Collect new shape IDs into a local vector, then store under lock.
+    std::vector<uint64_t> newIds;
+
     auto addLine = [&](Vec3 const& begin, Vec3 const& end) {
         auto id = sNextShapeId.fetch_sub(1);
         ShapeDataPayload shape;
@@ -150,7 +173,7 @@ void updateChunkBorder(Player& player) {
         shape.mDimensionId      = dimId;
         shape.mExtraDataPayload = LineDataPayload{.mEndLocation = end};
         pkt.mShapes->emplace_back(std::move(shape));
-        gShapeIds[guid].push_back(id);
+        newIds.push_back(id);
     };
 
     // North & South walls (sweep X)
@@ -173,15 +196,29 @@ void updateChunkBorder(Player& player) {
         addLine({maxX, y, minZ}, {maxX, y, maxZ}); // East
     }
 
+    // FIX #3: store new shape IDs under lock.
+    {
+        std::lock_guard lock(gChunkBorderMtx);
+        gShapeIds[guid] = std::move(newIds);
+    }
+
     pkt.sendTo(player);
 }
 
-// Spawns a detached thread that updates chunk borders every 40 ms.
-// The thread exits automatically when gChunkBorderCount drops to 0.
+// FIX #1 + FIX (loop task stacking):
+// - gLoopRunning prevents spawning duplicate loop threads.
+// - std::promise/future ensures we wait for the server thread task to finish
+//   before sleeping, so tasks never pile up in the server thread queue.
 void startChunkBorderLoop() {
+    bool expected = false;
+    if (!gLoopRunning.compare_exchange_strong(expected, true)) return; // already running
+
     ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
         while (gChunkBorderCount > 0) {
-            ll::thread::ServerThreadExecutor::getDefault().execute([]() {
+            std::promise<void> done;
+            auto               future = done.get_future();
+
+            ll::thread::ServerThreadExecutor::getDefault().execute([&done]() {
                 // Snapshot the list under lock so we don't hold it during packet sends.
                 std::vector<unsigned long long> active;
                 {
@@ -197,9 +234,13 @@ void startChunkBorderLoop() {
                         BDSE::getInstance().getSelf().getLogger().error("chunkBorder: {}", e.what());
                     }
                 }
+                done.set_value(); // signal pool thread that this tick is done
             });
+
+            future.wait(); // wait for server thread to finish before sleeping
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
         }
+        gLoopRunning = false; // allow a new loop to be spawned if needed later
     });
 }
 
@@ -355,7 +396,6 @@ bool BDSE::enable() {
         }
         auto guid = player->getNetworkIdentifier().mGuid.g;
         if (!ChunkBorderList.count(guid)) {
-            // First player to enable → start the loop if not already running.
             {
                 std::lock_guard lock(gChunkBorderMtx);
                 ChunkBorderList.insert(guid);
@@ -364,15 +404,17 @@ bool BDSE::enable() {
             updateChunkBorder(*player);
             output.success("§nChunk border§r §aenabled.");
         } else {
+            // call removeChunkBorder BEFORE erasing gShapeIds,
+            // otherwise removeChunkBorder finds an empty map and sends no
+            // delete packet — leaving the lines visible on the client.
+            removeChunkBorder(*player); // sends delete packet & erases gShapeIds[guid]
             {
                 std::lock_guard lock(gChunkBorderMtx);
                 ChunkBorderList.erase(guid);
                 gLastChunk.erase(guid);
-                gShapeIds.erase(guid);
+                // gShapeIds[guid] already erased inside removeChunkBorder
             }
-            // Decrement after erasing — loop thread sees count drop to 0 and exits.
             --gChunkBorderCount;
-            removeChunkBorder(*player);
             output.success("§nChunk border§r §4disabled.");
         }
         return;
@@ -453,16 +495,18 @@ bool BDSE::enable() {
 
             auto guid = event.self().getNetworkIdentifier().mGuid.g;
 
-            // If player had chunk border on, clean up and decrement counter.
+            // removeChunkBorder first (needs gShapeIds intact),
+            // then erase bookkeeping data.
             bool hadBorder = false;
             {
                 std::lock_guard lock(gChunkBorderMtx);
                 hadBorder = ChunkBorderList.erase(guid) > 0;
                 gLastChunk.erase(guid);
-                gShapeIds.erase(guid);
             }
-            if (hadBorder) --gChunkBorderCount;
-            removeChunkBorder(event.self());
+            if (hadBorder) {
+                removeChunkBorder(event.self()); // erases gShapeIds[guid] internally
+                --gChunkBorderCount;
+            }
         }));
 
     // On death: reset XP score to 0.
