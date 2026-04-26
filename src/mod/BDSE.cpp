@@ -129,7 +129,7 @@ void removeChunkBorder(Player& player) {
     sendDeletePacket(player, ids);
 }
 
-void updateChunkBorder(Player& plaAt the same time grab old IDs for deletion — all in one lock,yer) {
+void updateChunkBorder(Player& player) {
     Vec3 pos    = player.getPosition();
     int  chunkX = (int)std::floor(pos.x / 16);
     int  chunkZ = (int)std::floor(pos.z / 16);
