@@ -112,21 +112,27 @@ static void sendDeletePacket(Player& player, std::vector<uint64_t> const& ids) {
     pkt.sendTo(player);
 }
 
-// removeChunkBorder — get IDs from gShapeIds, send delete packet, then erase entry.
-// Safe to call from server thread at any time (acquire lock itself).
+// stealShapeIds — extract and return a player's shape IDs from gShapeIds while the
+// caller already holds gChunkBorderMtx. Returns empty vector if not found.
+// Must be called with gChunkBorderMtx held. No I/O performed.
+static std::vector<uint64_t> stealShapeIds(unsigned long long guid) {
+    auto it = gShapeIds.find(guid);
+    if (it == gShapeIds.end()) return {};
+    auto ids = std::move(it->second);
+    gShapeIds.erase(it);
+    return ids;
+}
+
+// removeChunkBorder — extract IDs under lock, then send delete packet outside lock.
+// Safe to call from server thread. Must NOT be called with gChunkBorderMtx held.
 void removeChunkBorder(Player& player) {
     auto guid = player.getNetworkIdentifier().mGuid.g;
-
     std::vector<uint64_t> ids;
     {
         std::lock_guard lock(gChunkBorderMtx);
-        auto it = gShapeIds.find(guid);
-        if (it == gShapeIds.end()) return;
-        ids = std::move(it->second); // take ownership
-        gShapeIds.erase(it);         // remove from map — before unlock
+        ids = stealShapeIds(guid);
     }
-    // Lock is released, safe for I/O
-    sendDeletePacket(player, ids);
+    sendDeletePacket(player, ids); // I/O outside lock
 }
 
 void updateChunkBorder(Player& player) {
@@ -399,25 +405,30 @@ bool BDSE::enable() {
             return;
         }
         auto guid = player->getNetworkIdentifier().mGuid.g;
-        if (!ChunkBorderList.count(guid)) {
-            {
-                std::lock_guard lock(gChunkBorderMtx);
+
+        // Determine toggle direction and update bookkeeping atomically under lock.
+        // All three maps (ChunkBorderList, gLastChunk, gShapeIds) are modified together
+        // so there is never a window where they are in an inconsistent state.
+        bool enabling = false;
+        std::vector<uint64_t> oldIds;
+        {
+            std::lock_guard lock(gChunkBorderMtx);
+            if (!ChunkBorderList.count(guid)) {
                 ChunkBorderList.insert(guid);
+                enabling = true;
+            } else {
+                ChunkBorderList.erase(guid);
+                gLastChunk.erase(guid);
+                oldIds = stealShapeIds(guid); // grab IDs while still under lock
             }
+        }
+
+        if (enabling) {
             if (++gChunkBorderCount == 1) startChunkBorderLoop();
             updateChunkBorder(*player);
             output.success("§nChunk border§r §aenabled.");
         } else {
-            // FIX #2: call removeChunkBorder BEFORE erasing gShapeIds,
-            // otherwise removeChunkBorder finds an empty map and sends no
-            // delete packet — leaving the lines visible on the client.
-            removeChunkBorder(*player); // sends delete packet & erases gShapeIds[guid]
-            {
-                std::lock_guard lock(gChunkBorderMtx);
-                ChunkBorderList.erase(guid);
-                gLastChunk.erase(guid);
-                // gShapeIds[guid] already erased inside removeChunkBorder
-            }
+            sendDeletePacket(*player, oldIds); // I/O outside lock
             --gChunkBorderCount;
             if (gChunkBorderCount == 0) gLoopSleep.interrupt();
             output.success("§nChunk border§r §4disabled.");
@@ -500,16 +511,19 @@ bool BDSE::enable() {
 
             auto guid = event.self().getNetworkIdentifier().mGuid.g;
 
-            // FIX #2: removeChunkBorder first (needs gShapeIds intact),
-            // then erase bookkeeping data.
+            // Atomically check and remove all chunk-border state for this player.
+            // stealShapeIds is called while the lock is still held so there is no
+            // window between "erase from ChunkBorderList" and "grab IDs to delete".
             bool hadBorder = false;
+            std::vector<uint64_t> ids;
             {
                 std::lock_guard lock(gChunkBorderMtx);
                 hadBorder = ChunkBorderList.erase(guid) > 0;
                 gLastChunk.erase(guid);
+                if (hadBorder) ids = stealShapeIds(guid);
             }
             if (hadBorder) {
-                removeChunkBorder(event.self());
+                sendDeletePacket(event.self(), ids); // I/O outside lock
                 --gChunkBorderCount;
                 if (gChunkBorderCount == 0) gLoopSleep.interrupt();
             }
