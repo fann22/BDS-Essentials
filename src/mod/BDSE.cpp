@@ -10,29 +10,39 @@
 #include "ll/api/io/LogLevel.h"
 #include "ll/api/io/Logger.h"
 #include "ll/api/mod/RegisterHelper.h"
+
 #include "ll/api/memory/Hook.h"
+
 #include "ll/api/command/CommandHandle.h"
 #include "ll/api/command/CommandRegistrar.h"
+
 #include "ll/api/event/entity/ActorHurtEvent.h"
+
 #include "ll/api/event/world/BlockChangedEvent.h"
+
 #include "ll/api/event/player/PlayerChatEvent.h"
 #include "ll/api/event/player/PlayerConnectEvent.h"
 #include "ll/api/event/player/PlayerDieEvent.h"
 #include "ll/api/event/player/PlayerDisconnectEvent.h"
 #include "ll/api/event/player/PlayerJoinEvent.h"
-#include <thread>
+
+#include "ll/api/thread/ThreadPoolExecutor.h"
+
 #include "ll/api/service/Bedrock.h"
 
 #include "ila/event/minecraft/server/ServerPongEvent.h"
 #include "ila/event/minecraft/server/SendPacketEvent.h"
+
 #include "ila/event/minecraft/world/actor/MobHealthChangeEvent.h"
 #include "ila/event/minecraft/world/level/block/FarmDecayEvent.h"
 
 #include "mc/platform/Result.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/shared_types/legacy/actor/ActorDamageCause.h"
+
 #include "mc/server/ServerInstance.h"
 #include "mc/server/commands/CommandOutput.h"
+
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
@@ -40,6 +50,7 @@
 #include "mc/world/attribute/AttributeInstance.h"
 #include "mc/world/attribute/AttributeInstanceRef.h"
 #include "mc/world/attribute/BaseAttributeMap.h"
+
 #include "mc/world/item/Item.h"
 #include "mc/world/item/registry/ItemRegistryRef.h"
 #include "mc/world/level/ILevel.h"
@@ -48,6 +59,7 @@
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/storage/LevelData.h"
+
 #include "mc/world/scores/DisplayObjective.h"
 #include "mc/world/scores/Objective.h"
 #include "mc/world/scores/ObjectiveCriteria.h"
@@ -57,6 +69,7 @@
 #include "mc/world/scores/Scoreboard.h"
 #include "mc/world/scores/ScoreboardId.h"
 #include "mc/world/scores/ScoreboardOperationResult.h"
+
 #include "mc/network/ServerNetworkHandler.h"
 #include "mc/network/NetEventCallback.h"
 #include "mc/network/NetworkIdentifier.h"
@@ -69,6 +82,7 @@
 #include "mc/network/packet/PlaySoundPacketPayload.h"
 
 #include <ll/api/chrono/GameChrono.h>
+#include <ll/api/thread/ServerThreadExecutor.h>
 
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/network/packet/DebugDrawerPacket.h"
@@ -81,84 +95,50 @@ ShapeDataPayload::ShapeDataPayload() { mNetworkId = 0; }
 
 namespace bds_essentials {
 
-// ============================================================
-//  Chunk border state
-// ============================================================
+static std::atomic<uint64_t> sNextShapeId{UINT64_MAX};
+static std::unordered_map<unsigned long long, std::pair<int,int>>        gLastChunk;
+static std::unordered_map<unsigned long long, std::vector<uint64_t>>     gShapeIds;
+static std::mutex                                                         gChunkMtx;
 
-static std::atomic<uint64_t>                                         sNextShapeId{UINT64_MAX};
-static std::unordered_map<unsigned long long, std::pair<int,int>>    gLastChunk;
-static std::unordered_map<unsigned long long, std::vector<uint64_t>> gShapeIds;
-static std::unordered_set<unsigned long long>                        ChunkBorderList;
-static std::mutex                                                    gChunkBorderMtx;
+void removeChunkBorder(Player& player) {
+    auto guid = player.getNetworkIdentifier().mGuid.g;
 
+    std::vector<uint64_t> ids;
+    {
+        std::lock_guard lock(gChunkMtx);
+        auto it = gShapeIds.find(guid);
+        if (it == gShapeIds.end()) return;
+        ids = std::move(it->second);
+        gShapeIds.erase(it);
+    }
 
-
-// sendDeletePacket — send a packet to delete shapes to the client based on vector IDs.
-// Doesn't touch gShapeIds at all; Ownership is completely in the caller.
-static void sendDeletePacket(Player& player, std::vector<uint64_t> const& ids) {
-    if (ids.empty()) return;
     DebugDrawerPacket pkt;
     pkt.setSerializationMode(SerializationMode::CerealOnly);
     for (auto id : ids) {
         ShapeDataPayload shape;
         shape.mNetworkId = id;
-        shape.mShapeType = std::nullopt; // 
+        shape.mShapeType = std::nullopt;
         pkt.mShapes->emplace_back(std::move(shape));
     }
     pkt.sendTo(player);
 }
 
-// stealShapeIds — extract and return a player's shape IDs from gShapeIds while the
-// caller already holds gChunkBorderMtx. Returns empty vector if not found.
-// Must be called with gChunkBorderMtx held. No I/O performed.
-static std::vector<uint64_t> stealShapeIds(unsigned long long guid) {
-    auto it = gShapeIds.find(guid);
-    if (it == gShapeIds.end()) return {};
-    auto ids = std::move(it->second);
-    gShapeIds.erase(it);
-    return ids;
-}
-
-// removeChunkBorder — extract IDs under lock, then send delete packet outside lock.
-// Safe to call from server thread. Must NOT be called with gChunkBorderMtx held.
-void removeChunkBorder(Player& player) {
-    auto guid = player.getNetworkIdentifier().mGuid.g;
-    std::vector<uint64_t> ids;
-    {
-        std::lock_guard lock(gChunkBorderMtx);
-        ids = stealShapeIds(guid);
-    }
-    sendDeletePacket(player, ids); // I/O outside lock
-}
-
 void updateChunkBorder(Player& player) {
-    Vec3 pos    = player.getPosition();
-    int  chunkX = (int)std::floor(pos.x / 16);
-    int  chunkZ = (int)std::floor(pos.z / 16);
-    auto guid   = player.getNetworkIdentifier().mGuid.g;
+    Vec3 pos   = player.getPosition();
+    int chunkX = (int)std::floor(pos.x / 16);
+    int chunkZ = (int)std::floor(pos.z / 16);
 
-    // Check if the player is still in the same chunk.
-    // At the same time grab old IDs for deletion — all in one lock,
-    // so there is no window between "check chunk" and "retrieve old IDs".
-    std::vector<uint64_t> oldIds;
+    auto guid = player.getNetworkIdentifier().mGuid.g;
+
     {
-        std::lock_guard lock(gChunkBorderMtx);
-        auto& lastChunk = gLastChunk[guid];
-        if (lastChunk == std::make_pair(chunkX, chunkZ)) return; // haven't moved chunk yet
-        lastChunk = {chunkX, chunkZ};
-
-        // Take ownership of old IDs now, while they are still under lock.
-        auto it = gShapeIds.find(guid);
-        if (it != gShapeIds.end()) {
-            oldIds = std::move(it->second);
-            gShapeIds.erase(it);
-        }
+        std::lock_guard lock(gChunkMtx);
+        auto it = gLastChunk.find(guid);
+        if (it != gLastChunk.end() && it->second == std::make_pair(chunkX, chunkZ)) return;
+        gLastChunk[guid] = {chunkX, chunkZ};
     }
 
-    // Send delete packet shapes old — lock has been released
-    sendDeletePacket(player, oldIds);
+    removeChunkBorder(player);
 
-    // Build new shapes
     float minX = (chunkX * 16);
     float minZ = (chunkZ * 16);
     float maxX = (chunkX * 16) + 16.0f;
@@ -170,8 +150,8 @@ void updateChunkBorder(Player& player) {
 
     DebugDrawerPacket pkt;
     pkt.setSerializationMode(SerializationMode::CerealOnly);
-    std::vector<uint64_t> newIds;
 
+    std::vector<uint64_t> newIds;
     auto addLine = [&](Vec3 const& begin, Vec3 const& end) {
         auto id = sNextShapeId.fetch_sub(1);
         ShapeDataPayload shape;
@@ -185,19 +165,19 @@ void updateChunkBorder(Player& player) {
         newIds.push_back(id);
     };
 
-    // North & South walls (sweep X)
+    // North & South (sweep X)
     for (float x = minX; x <= maxX; x += 2.0f) {
-        addLine({x, minY, minZ}, {x, maxY, minZ});
-        addLine({x, minY, maxZ}, {x, maxY, maxZ});
+        addLine({x, minY, minZ}, {x, maxY, minZ}); // North
+        addLine({x, minY, maxZ}, {x, maxY, maxZ}); // South
     }
 
-    // West & East walls (sweep Z)
+    // West & East (sweep Z)
     for (float z = minZ; z <= maxZ; z += 2.0f) {
-        addLine({minX, minY, z}, {minX, maxY, z});
-        addLine({maxX, minY, z}, {maxX, maxY, z});
+        addLine({minX, minY, z}, {minX, maxY, z}); // West
+        addLine({maxX, minY, z}, {maxX, maxY, z}); // East
     }
 
-    // Horizontal rings every 2 blocks
+    // Horizontal rings every 2 block (full height)
     for (float y = minY; y <= maxY; y += 2.0f) {
         addLine({minX, y, minZ}, {maxX, y, minZ}); // North
         addLine({minX, y, maxZ}, {maxX, y, maxZ}); // South
@@ -205,22 +185,14 @@ void updateChunkBorder(Player& player) {
         addLine({maxX, y, minZ}, {maxX, y, maxZ}); // East
     }
 
-    // Send new shapes to the client first, then store their IDs.
-    // This order is important: if the server crashes after sendTo but before store,
-    // IDs are lost and there is no leak on the client side (sha
     pkt.sendTo(player);
 
     {
-        std::lock_guard lock(gChunkBorderMtx);
+        std::lock_guard lock(gChunkMtx);
         gShapeIds[guid] = std::move(newIds);
     }
 }
 
-// ============================================================
-//  Hooks
-// ============================================================
-
-// Sync XP level to the sidebar scoreboard whenever a player gains levels.
 LL_TYPE_INSTANCE_HOOK(
     PlayerAddLevelHook,
     ll::memory::HookPriority::Normal,
@@ -232,24 +204,29 @@ LL_TYPE_INSTANCE_HOOK(
     BDSE&       bdse        = BDSE::getInstance();
     Scoreboard* scoreboard  = bdse.getScoreboard();
     Objective*  xpObjective = bdse.getXPObjective();
-
+    
     BaseAttributeMap&    attrMap = const_cast<BaseAttributeMap&>(*this->getAttributes());
     AttributeInstanceRef ref     = attrMap.getMutableInstance(Player::LEVEL().mIDValue);
     int                  fixLvl  = std::max(0, int(ref.mPtr->mCurrentValue) + lvl);
-    // using std::max() cuz the value might be negative, we definitely don't want that to happen.
+    // using std::max() cuz the value might be negative, we definitely don't want that to happend.
 
     if (scoreboard && xpObjective) {
-        ScoreboardId const& id = scoreboard->getScoreboardId(*this);
+        ScoreboardId const& id = scoreboard->getScoreboardId(*this); // *this == Player
         if (id != ScoreboardId::INVALID()) {
             ScoreboardOperationResult result;
-            scoreboard->modifyPlayerScore(result, id, *xpObjective, fixLvl, PlayerScoreSetFunction::Set);
+            scoreboard->modifyPlayerScore(
+                result,
+                id,
+                *xpObjective,
+                fixLvl,
+                PlayerScoreSetFunction::Set
+            );
         }
     }
 
     origin(lvl);
 }
 
-// Prevent achievements from being flagged as disabled on world load.
 LL_TYPE_INSTANCE_HOOK(
     AchievementsWillBeDisabledHook,
     ll::memory::HookPriority::Normal,
@@ -257,37 +234,29 @@ LL_TYPE_INSTANCE_HOOK(
     &LevelData::achievementsWillBeDisabledOnLoad,
     bool
 ) {
-    return false;
+    return false; // fuck you.
 }
 
-// Swallow the disable call entirely — achievements stay enabled.
 LL_TYPE_INSTANCE_HOOK(
     DisableAchievementsHook,
     ll::memory::HookPriority::Normal,
     LevelData,
     &LevelData::disableAchievements,
     void
-) {}
+) {
+    // 🦗...
+}
 
-// ============================================================
-//  Helpers
-// ============================================================
-
-// Returns (or creates) the ScoreboardId for a player.
 const ScoreboardId* getOrCreateScoreboardId(Player& player) {
     Scoreboard *scoreboard = BDSE::getInstance().getScoreboard();
     if (!scoreboard) return nullptr;
 
     ScoreboardId const* id = &scoreboard->getScoreboardId(player);
-    if (*id == ScoreboardId::INVALID())
+    if (*id == ScoreboardId::INVALID()) {
         id = &scoreboard->createScoreboardId(player);
-
+    }
     return id;
 }
-
-// ============================================================
-//  BDSE lifecycle
-// ============================================================
 
 BDSE& BDSE::getInstance() {
     static BDSE instance;
@@ -295,179 +264,148 @@ BDSE& BDSE::getInstance() {
 }
 
 static std::vector<ll::event::ListenerPtr> gListeners;
-
-// MOTD messages cycled on every server ping.
-// NOTE: if you want per-ping randomization instead of sequential rotation,
-// replace gMotdIndex logic with: rand() % gMotdMessages.size()
 static std::vector<std::string> gMotdMessages = {
     "•> 𝗩𝗮𝗻𝗶𝗹𝗹𝗮 𝗦𝗲𝗿𝘃𝗲𝗿 <•",
     "•> play.anomaly.bond <•",
     "•> PORT: 25600 <•"
 };
-// Rotated by a background thread every 1.5 s — read on ping event (different thread),
-// so atomic is the right tool here.
-static std::atomic<int>  gMotdIndex{0};
-static std::atomic<bool> gRunning{false};
+static std::atomic<int>  gMotdIndex = 0;
+static std::atomic<bool> gRunning   = false;
+static std::unordered_set<unsigned long long> ChunkBorderList;
 
 bool BDSE::load() {
+    // getSelf().getLogger().debug("Loading...");
     return true;
 }
 
 bool BDSE::enable() {
     gRunning = true;
-
-    // Background: rotate MOTD index every 1.5 s.
-    std::thread([]() {
+    ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
         while (gRunning) {
+            gMotdIndex = (gMotdIndex + 1) % gMotdMessages.size();
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-            if (!gRunning) break;
-            gMotdIndex = (gMotdIndex + 1) % (int)gMotdMessages.size();
         }
-    }).detach();
-
-    // Background: update chunk border for all active players every 50 ms.
-    std::thread([]() {
+    });
+    ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
         while (gRunning) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            if (!gRunning) break;
-
-            std::vector<unsigned long long> active;
-            {
-                std::lock_guard lock(gChunkBorderMtx);
-                active.assign(ChunkBorderList.begin(), ChunkBorderList.end());
-            }
-            for (auto guid : active) {
-                Player* player = ll::service::getLevel()->getPlayer(guid);
-                if (!player) continue;
-                try {
-                    updateChunkBorder(*player);
-                } catch (std::exception& e) {
-                    BDSE::getInstance().getSelf().getLogger().error("chunkBorder: {}", e.what());
-                }
-            }
+            ll::thread::ServerThreadExecutor::getDefault().execute([]() {
+                ll::service::getLevel()->forEachPlayer([](Player& player) -> bool {
+                    try {
+                        auto guid = player.getNetworkIdentifier().mGuid.g;
+                        bool active = false;
+                        { std::lock_guard lock(gChunkMtx); active = ChunkBorderList.count(guid) > 0; }
+                        if (active) updateChunkBorder(player);
+                    } catch (std::exception& e) {
+                        BDSE::getInstance().getSelf().getLogger().error("drawChunkGrid: {}", e.what());
+                    }
+                    return true;
+                });
+            });
+    
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
         }
-    }).detach();
-
-    // ── Commands ─────────────────────────────────────────────
+    });
 
     freeCamera::FreeCameraManager::freecameraHook(true);
     auto& cmd = ll::command::CommandRegistrar::getInstance(false).getOrCreateCommand("freecamera", "Toggle freecam.");
     ll::service::getCommandRegistry()->registerAlias("freecamera", "fc");
     cmd.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
-        auto entity = origin.getEntity();
-        if (entity == nullptr || !entity->isType(ActorType::Player)) {
-            output.error("§4Only players can run this command.");
+            auto entity = origin.getEntity();
+            if (entity == nullptr || !entity->isType(ActorType::Player)) {
+                output.error("Only players can run this command.");
+                return;
+            }
+            auto* player = ll::service::getLevel()->getPlayer(entity->getOrCreateUniqueID());
+            if (!player) {
+                output.error("Didn't found the target player.");
+                return;
+            }
+            auto guid = player->getNetworkIdentifier().mGuid.g;
+            if (!freeCamera::FreeCameraManager::getInstance().FreeCamList.count(guid)) {
+                freeCamera::FreeCameraManager::EnableFreeCamera(player);
+                output.success("FreeCamera enabled.");
+            } else {
+                freeCamera::FreeCameraManager::DisableFreeCamera(player);
+                output.success("FreeCamera disabled.");
+            }
             return;
         }
-        auto* player = ll::service::getLevel()->getPlayer(entity->getOrCreateUniqueID());
-        if (!player) {
-            output.error("§4Didn't found the target player.");
-            return;
-        }
-        auto guid = player->getNetworkIdentifier().mGuid.g;
-        if (!freeCamera::FreeCameraManager::getInstance().FreeCamList.count(guid)) {
-            freeCamera::FreeCameraManager::EnableFreeCamera(player);
-            output.success("§nFree Camera§r §aenabled.");
-        } else {
-            freeCamera::FreeCameraManager::DisableFreeCamera(player);
-            output.success("§nFree Camera§r §4disabled.");
-        }
-        return;
-    });
-
+    );
     auto& cmd2 = ll::command::CommandRegistrar::getInstance(false).getOrCreateCommand("chunkborder", "Toggle chunk border.");
     ll::service::getCommandRegistry()->registerAlias("chunkborder", "cb");
     cmd2.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
-        auto entity = origin.getEntity();
-        if (entity == nullptr || !entity->isType(ActorType::Player)) {
-            output.error("§4Only players can run this command.");
-            return;
-        }
-        auto* player = ll::service::getLevel()->getPlayer(entity->getOrCreateUniqueID());
-        if (!player) {
-            output.error("§4Didn't found the target player.");
-            return;
-        }
-        auto guid = player->getNetworkIdentifier().mGuid.g;
-
-        // Determine toggle direction and update bookkeeping atomically under lock.
-        // All three maps (ChunkBorderList, gLastChunk, gShapeIds) are modified together
-        // so there is never a window where they are in an inconsistent state.
-        bool enabling = false;
-        std::vector<uint64_t> oldIds;
-        {
-            std::lock_guard lock(gChunkBorderMtx);
-            if (!ChunkBorderList.count(guid)) {
-                ChunkBorderList.insert(guid);
-                enabling = true;
-            } else {
-                ChunkBorderList.erase(guid);
-                gLastChunk.erase(guid);
-                oldIds = stealShapeIds(guid); // grab IDs while still under lock
+            auto entity = origin.getEntity();
+            if (entity == nullptr || !entity->isType(ActorType::Player)) {
+                output.error("Only players can run this command.");
+                return;
             }
+            auto* player = ll::service::getLevel()->getPlayer(entity->getOrCreateUniqueID());
+            if (!player) {
+                output.error("Didn't found the target player.");
+                return;
+            }
+            auto guid = player->getNetworkIdentifier().mGuid.g;
+            bool wasAbsent = false;
+            { std::lock_guard lock(gChunkMtx); wasAbsent = ChunkBorderList.insert(guid).second; }
+            if (wasAbsent) {
+                updateChunkBorder(*player);
+                output.success("Chunk border enabled.");
+            } else {
+                { std::lock_guard lock(gChunkMtx); ChunkBorderList.erase(guid); }
+                removeChunkBorder(*player); // acquires lock internally
+                {
+                    std::lock_guard lock(gChunkMtx);
+                    gLastChunk.erase(guid);
+                    // gShapeIds already erased inside removeChunkBorder
+                }
+                output.success("Chunk border disabled.");
+            }
+            return;
         }
-
-        if (enabling) {
-            updateChunkBorder(*player);
-            output.success("§nChunk border§r §aenabled.");
-        } else {
-            sendDeletePacket(*player, oldIds); // I/O outside lock
-            output.success("§nChunk border§r §4disabled.");
-        }
-        return;
-    });
-
-    // ── Scoreboard setup ─────────────────────────────────────
+    );
 
     ll::service::getLevel()->getLevelData().mAchievementsDisabled = false;
     mScoreboard = &ll::service::getLevel()->getScoreboard();
 
-    // Clear any pre-existing objectives to start fresh.
     auto objectives = mScoreboard->getObjectives();
-    for (auto* obj : objectives)
+    for (auto* obj : objectives) {
         mScoreboard->removeObjective(const_cast<Objective*>(obj));
+    }
 
     ObjectiveCriteria* criteria = mScoreboard->getCriteria(Scoreboard::DEFAULT_CRITERIA());
     if (!criteria) {
         criteria = const_cast<ObjectiveCriteria*>(
-            &mScoreboard->createObjectiveCriteria(
-                Scoreboard::DEFAULT_CRITERIA(), false, ::ObjectiveRenderType::Integer));
+            &mScoreboard->createObjectiveCriteria(Scoreboard::DEFAULT_CRITERIA(), false, ::ObjectiveRenderType::Integer)
+        );
     }
 
     mHealthObjective = mScoreboard->addObjective("PlayerHealth", "❤", *criteria);
-    mScoreboard->setDisplayObjective(
-        Scoreboard::DISPLAY_SLOT_BELOWNAME(), *mHealthObjective, ObjectiveSortOrder::Descending);
+    mScoreboard->setDisplayObjective(Scoreboard::DISPLAY_SLOT_BELOWNAME(), *mHealthObjective, ObjectiveSortOrder::Descending);
 
     mXPObjective = mScoreboard->addObjective("MostLVL", "•> Most Level <•", *criteria);
-    mScoreboard->setDisplayObjective(
-        Scoreboard::DISPLAY_SLOT_SIDEBAR(), *mXPObjective, ObjectiveSortOrder::Descending);
-
-    // ── Feature hooks ─────────────────────────────────────────
+    mScoreboard->setDisplayObjective(Scoreboard::DISPLAY_SLOT_SIDEBAR(), *mXPObjective, ObjectiveSortOrder::Descending);
 
     features::fast_leaf_decay::enable();
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
     PlayerAddLevelHook::hook();
 
-    // ── Event listeners ───────────────────────────────────────
-
     auto& bus = ll::event::EventBus::getInstance();
 
-    // Prevent farmland from decaying.
     gListeners.insert(
         gListeners.begin(),
-        bus.emplaceListener<ila::mc::FarmDecayBeforeEvent>(
-            [](ila::mc::FarmDecayBeforeEvent& event) { event.cancel(); }));
+        bus.emplaceListener<ila::mc::FarmDecayBeforeEvent>([](ila::mc::FarmDecayBeforeEvent& event) { event.cancel(); })
+    );
 
-    // Rotate MOTD text.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ila::mc::ServerPongBeforeEvent>(
             [](ila::mc::ServerPongBeforeEvent& event) {
                 event.motd() = gMotdMessages[gMotdIndex];
-            }));
+            }
+        )
+    );
 
-    // On join: populate health and XP scores.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::PlayerJoinEvent>([this](ll::event::PlayerJoinEvent& event) {
@@ -480,35 +418,25 @@ bool BDSE::enable() {
 
             ScoreboardOperationResult result;
             mScoreboard->modifyPlayerScore(result, *id, *mHealthObjective, player.getHealth(), PlayerScoreSetFunction::Set);
-            mScoreboard->modifyPlayerScore(result, *id, *mXPObjective,     lvl,                PlayerScoreSetFunction::Set);
-        }));
+            mScoreboard->modifyPlayerScore(result, *id, *mXPObjective, lvl, PlayerScoreSetFunction::Set);
+        })
+    );
 
-    // On disconnect: remove scores and clean up chunk border state.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::PlayerDisconnectEvent>([this](ll::event::PlayerDisconnectEvent& event) {
             ScoreboardId const* id = getOrCreateScoreboardId(event.self());
             if (id != nullptr) mScoreboard->resetPlayerScore(*id);
-
             auto guid = event.self().getNetworkIdentifier().mGuid.g;
-
-            // Atomically check and remove all chunk-border state for this player.
-            // stealShapeIds is called while the lock is still held so there is no
-            // window between "erase from ChunkBorderList" and "grab IDs to delete".
-            bool hadBorder = false;
-            std::vector<uint64_t> ids;
+            removeChunkBorder(event.self()); // acquires lock internally
             {
-                std::lock_guard lock(gChunkBorderMtx);
-                hadBorder = ChunkBorderList.erase(guid) > 0;
+                std::lock_guard lock(gChunkMtx);
                 gLastChunk.erase(guid);
-                if (hadBorder) ids = stealShapeIds(guid);
+                // gShapeIds already erased inside removeChunkBorder
             }
-            if (hadBorder) {
-                sendDeletePacket(event.self(), ids); // I/O outside lock
-            }
-        }));
+        })
+    );
 
-    // On death: reset XP score to 0.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::PlayerDieEvent>([this](ll::event::PlayerDieEvent& event) {
@@ -516,35 +444,35 @@ bool BDSE::enable() {
             if (id == nullptr) return;
 
             ScoreboardOperationResult result;
-            mScoreboard->modifyPlayerScore(result, *id, *mXPObjective, 0, PlayerScoreSetFunction::Set);
-        }));
+            mScoreboard->modifyPlayerScore(
+                result, *id,
+                *mXPObjective,
+                0,
+                PlayerScoreSetFunction::Set
+            );
+        })
+    );
 
-    // Keep health score in sync whenever HP changes.
-    // Guard: only run for players, skip if health is out of valid range,
-    // and skip if new value is 0 or less (death is handled by PlayerDieEvent).
-    // This prevents a deadlock when Bedrock's explosion damage loop fires
-    // MobHealthChangeAfterEvent for multiple actors simultaneously —
-    // modifyPlayerScore would then race on Bedrock's internal scoreboard lock.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ila::mc::MobHealthChangeAfterEvent>([this](ila::mc::MobHealthChangeAfterEvent& event) {
-            if (!event.self().isPlayer()) return;
-
-            float newHp  = event.newValue();
-            float maxHp  = float(event.self().getMaxHealth());
-            if (newHp <= 0.0f || newHp > maxHp) return; // dead or bogus value — skip
+            if (!event.self().isPlayer() || event.newValue() > float(event.self().getMaxHealth())) return;
+            // BDSE::getInstance().getSelf().getLogger().info("{} -> {}", event.oldValue(), event.newValue());
 
             ScoreboardId const* id = getOrCreateScoreboardId(static_cast<Player&>(event.self()));
             if (id == nullptr) return;
 
             ScoreboardOperationResult result;
             mScoreboard->modifyPlayerScore(
-                result, *id, *mHealthObjective,
-                static_cast<int>(std::ceil(newHp)),
-                PlayerScoreSetFunction::Set);
-        }));
+                result,
+                *id,
+                *mHealthObjective,
+                static_cast<int>(std::ceil(event.newValue())), 
+                PlayerScoreSetFunction::Set
+            );
+        })
+    );
 
-    // Play a sound for the shooter when their projectile hits something.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::ActorHurtEvent>([](ll::event::ActorHurtEvent& event) {
@@ -560,9 +488,9 @@ bool BDSE::enable() {
                 ));
                 player->sendNetworkPacket(packet);
             }
-        }));
+        })
+    );
 
-    // Intercept chat: log, reformat with colour, and broadcast.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::PlayerChatEvent>([](ll::event::PlayerChatEvent& event) {
@@ -570,20 +498,40 @@ bool BDSE::enable() {
             auto message = "§b" + event.self().getRealName() + "§f: " + event.message();
             TextPacket::createRawMessage(message).sendToClients();
             event.cancel();
-        }));
+        })
+    );
 
+    gListeners.insert(
+        gListeners.begin(),
+        bus.emplaceListener<ll::event::BlockChangedEvent>([](ll::event::BlockChangedEvent& event) {
+            BlockPos const& pos      = event.pos();
+            Block const&    newBlock = event.newBlock();
+
+            if (newBlock.getTypeName() == "minecraft:glass") {
+                auto const& replacement = Block::tryGetFromRegistry(std::string_view("glass:regular"));
+                if (!replacement) return;
+
+                ll::thread::ServerThreadExecutor::getDefault().executeAfter(
+                    [pos, replacement](){
+                        UpdateBlockPacket pkt;
+                        pkt.mPos         = pos;
+                        pkt.mRuntimeId   = (*replacement).mSerializationIdHashForNetwork;
+                        pkt.mLayer       = 0;
+                        pkt.mUpdateFlags = 0b0011; // FLAG_NEIGHBORS | FLAG_NETWORK
+                        pkt.sendToClients();
+                    },
+                    ll::chrono::ticks(4)
+                );
+            }
+        })
+    );
+
+    // getSelf().getLogger().info("loaded.");
     return true;
 }
 
 bool BDSE::disable() {
     gRunning = false;
-
-    {
-        std::lock_guard lock(gChunkBorderMtx);
-        ChunkBorderList.clear();
-        gLastChunk.clear();
-        gShapeIds.clear();
-    }
 
     features::fast_leaf_decay::disable();
     freeCamera::FreeCameraManager::freecameraHook(false);
@@ -592,10 +540,12 @@ bool BDSE::disable() {
     PlayerAddLevelHook::unhook();
 
     auto& bus = ll::event::EventBus::getInstance();
+
     for (auto& listener : gListeners) {
         bus.removeListener(listener);
         listener.reset();
     }
+
     gListeners.clear();
 
     mScoreboard      = nullptr;
