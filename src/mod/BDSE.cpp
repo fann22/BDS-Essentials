@@ -91,10 +91,7 @@ static std::unordered_map<unsigned long long, std::vector<uint64_t>> gShapeIds;
 static std::unordered_set<unsigned long long>                        ChunkBorderList;
 static std::mutex                                                    gChunkBorderMtx;
 
-static std::atomic<int>  gChunkBorderCount{0};
-static std::atomic<bool> gLoopRunning{false};
-static std::atomic<bool> gLoopStop{false};
-static std::thread       gLoopThread;
+
 
 // sendDeletePacket — send a packet to delete shapes to the client based on vector IDs.
 // Doesn't touch gShapeIds at all; Ownership is completely in the caller.
@@ -219,38 +216,6 @@ void updateChunkBorder(Player& player) {
     }
 }
 
-void startChunkBorderLoop() {
-    bool expected = false;
-    if (!gLoopRunning.compare_exchange_strong(expected, true)) return;
-
-    gLoopStop    = false;
-    gLoopThread  = std::thread([]() {
-        while (!gLoopStop) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-            if (gLoopStop) break;
-
-            std::vector<unsigned long long> active;
-            {
-                std::lock_guard lock(gChunkBorderMtx);
-                active.assign(ChunkBorderList.begin(), ChunkBorderList.end());
-            }
-            for (auto guid : active) {
-                if (gLoopStop) break;
-                Player* player = ll::service::getLevel()->getPlayer(guid);
-                if (!player) continue;
-                try {
-                    updateChunkBorder(*player);
-                } catch (std::exception& e) {
-                    BDSE::getInstance().getSelf().getLogger().error("chunkBorder: {}", e.what());
-                }
-            }
-        }
-        gLoopRunning = false;
-    });
-    gLoopThread.detach();
-}
-
 // ============================================================
 //  Hooks
 // ============================================================
@@ -360,6 +325,29 @@ bool BDSE::enable() {
         }
     }).detach();
 
+    // Background: update chunk border for all active players every 50 ms.
+    std::thread([]() {
+        while (gRunning) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (!gRunning) break;
+
+            std::vector<unsigned long long> active;
+            {
+                std::lock_guard lock(gChunkBorderMtx);
+                active.assign(ChunkBorderList.begin(), ChunkBorderList.end());
+            }
+            for (auto guid : active) {
+                Player* player = ll::service::getLevel()->getPlayer(guid);
+                if (!player) continue;
+                try {
+                    updateChunkBorder(*player);
+                } catch (std::exception& e) {
+                    BDSE::getInstance().getSelf().getLogger().error("chunkBorder: {}", e.what());
+                }
+            }
+        }
+    }).detach();
+
     // ── Commands ─────────────────────────────────────────────
 
     freeCamera::FreeCameraManager::freecameraHook(true);
@@ -420,13 +408,10 @@ bool BDSE::enable() {
         }
 
         if (enabling) {
-            if (++gChunkBorderCount == 1) startChunkBorderLoop();
             updateChunkBorder(*player);
             output.success("§nChunk border§r §aenabled.");
         } else {
             sendDeletePacket(*player, oldIds); // I/O outside lock
-            --gChunkBorderCount;
-            if (gChunkBorderCount == 0) gLoopStop = true;
             output.success("§nChunk border§r §4disabled.");
         }
         return;
@@ -520,8 +505,6 @@ bool BDSE::enable() {
             }
             if (hadBorder) {
                 sendDeletePacket(event.self(), ids); // I/O outside lock
-                --gChunkBorderCount;
-                if (gChunkBorderCount == 0) gLoopStop = true;
             }
         }));
 
@@ -595,12 +578,6 @@ bool BDSE::enable() {
 bool BDSE::disable() {
     gRunning = false;
 
-    gChunkBorderCount = 0;
-    gLoopStop = true; // signal loop thread to exit
-    // gLoopThread is detached — just wait up to 200ms for it to notice gLoopStop
-    // before clearing shared state, so it doesn't touch maps mid-clear.
-    for (int i = 0; i < 4 && gLoopRunning; ++i)
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     {
         std::lock_guard lock(gChunkBorderMtx);
         ChunkBorderList.clear();
