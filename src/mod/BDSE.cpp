@@ -302,7 +302,7 @@ bool BDSE::enable() {
                 });
             });
     
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     });
 
@@ -498,31 +498,6 @@ bool BDSE::enable() {
             auto message = "§b" + event.self().getRealName() + "§f: " + event.message();
             TextPacket::createRawMessage(message).sendToClients();
             event.cancel();
-        })
-    );
-
-    gListeners.insert(
-        gListeners.begin(),
-        bus.emplaceListener<ll::event::BlockChangedEvent>([](ll::event::BlockChangedEvent& event) {
-            BlockPos const& pos      = event.pos();
-            Block const&    newBlock = event.newBlock();
-
-            if (newBlock.getTypeName() == "minecraft:glass") {
-                auto const& replacement = Block::tryGetFromRegistry(std::string_view("glass:regular"));
-                if (!replacement) return;
-
-                ll::thread::ServerThreadExecutor::getDefault().executeAfter(
-                    [pos, replacement](){
-                        UpdateBlockPacket pkt;
-                        pkt.mPos         = pos;
-                        pkt.mRuntimeId   = (*replacement).mSerializationIdHashForNetwork;
-                        pkt.mLayer       = 0;
-                        pkt.mUpdateFlags = 0b0011; // FLAG_NEIGHBORS | FLAG_NETWORK
-                        pkt.sendToClients();
-                    },
-                    ll::chrono::ticks(4)
-                );
-            }
         })
     );
 
