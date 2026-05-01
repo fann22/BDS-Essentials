@@ -20,8 +20,7 @@
 #include "ll/api/event/player/PlayerDieEvent.h"
 #include "ll/api/event/player/PlayerDisconnectEvent.h"
 #include "ll/api/event/player/PlayerJoinEvent.h"
-#include "ll/api/thread/ThreadPoolExecutor.h"
-#include "ll/api/thread/InterruptableSleep.h"
+#include <thread>
 #include "ll/api/service/Bedrock.h"
 
 #include "ila/event/minecraft/server/ServerPongEvent.h"
@@ -70,7 +69,6 @@
 #include "mc/network/packet/PlaySoundPacketPayload.h"
 
 #include <ll/api/chrono/GameChrono.h>
-#include <ll/api/thread/ServerThreadExecutor.h>
 
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/network/packet/DebugDrawerPacket.h"
@@ -93,9 +91,10 @@ static std::unordered_map<unsigned long long, std::vector<uint64_t>> gShapeIds;
 static std::unordered_set<unsigned long long>                        ChunkBorderList;
 static std::mutex                                                    gChunkBorderMtx;
 
-static std::atomic<int>      gChunkBorderCount{0};
-static std::atomic<bool>     gLoopRunning{false};
-static ll::thread::InterruptableSleep gLoopSleep;
+static std::atomic<int>  gChunkBorderCount{0};
+static std::atomic<bool> gLoopRunning{false};
+static std::atomic<bool> gLoopStop{false};
+static std::thread       gLoopThread;
 
 // sendDeletePacket — send a packet to delete shapes to the client based on vector IDs.
 // Doesn't touch gShapeIds at all; Ownership is completely in the caller.
@@ -224,36 +223,32 @@ void startChunkBorderLoop() {
     bool expected = false;
     if (!gLoopRunning.compare_exchange_strong(expected, true)) return;
 
-    ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
-        while (gChunkBorderCount > 0) {
-            // InterruptableSleep: can be forcibly interrupted during sleep/sleep.
-            // without having to wait for 50ms to expire.
-            gLoopSleep.sleepFor(std::chrono::milliseconds(50));
+    gLoopStop    = false;
+    gLoopThread  = std::thread([]() {
+        while (!gLoopStop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-            if (gChunkBorderCount <= 0) break;
+            if (gLoopStop) break;
 
-            // Fire-and-forget to the server thread — no need to block/wait.
-            // ServerThreadExecutor processes tasks sequentially, so it won't
-            // stack for 40ms intervals
-            ll::thread::ServerThreadExecutor::getDefault().execute([]() {
-                std::vector<unsigned long long> active;
-                {
-                    std::lock_guard lock(gChunkBorderMtx);
-                    active.assign(ChunkBorderList.begin(), ChunkBorderList.end());
+            std::vector<unsigned long long> active;
+            {
+                std::lock_guard lock(gChunkBorderMtx);
+                active.assign(ChunkBorderList.begin(), ChunkBorderList.end());
+            }
+            for (auto guid : active) {
+                if (gLoopStop) break;
+                Player* player = ll::service::getLevel()->getPlayer(guid);
+                if (!player) continue;
+                try {
+                    updateChunkBorder(*player);
+                } catch (std::exception& e) {
+                    BDSE::getInstance().getSelf().getLogger().error("chunkBorder: {}", e.what());
                 }
-                for (auto guid : active) {
-                    Player* player = ll::service::getLevel()->getPlayer(guid);
-                    if (!player) continue;
-                    try {
-                        updateChunkBorder(*player);
-                    } catch (std::exception& e) {
-                        BDSE::getInstance().getSelf().getLogger().error("chunkBorder: {}", e.what());
-                    }
-                }
-            });
+            }
         }
         gLoopRunning = false;
     });
+    gLoopThread.detach();
 }
 
 // ============================================================
@@ -357,12 +352,13 @@ bool BDSE::enable() {
     gRunning = true;
 
     // Background: rotate MOTD index every 1.5 s.
-    ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
+    std::thread([]() {
         while (gRunning) {
-            gMotdIndex = (gMotdIndex + 1) % (int)gMotdMessages.size();
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+            if (!gRunning) break;
+            gMotdIndex = (gMotdIndex + 1) % (int)gMotdMessages.size();
         }
-    });
+    }).detach();
 
     // ── Commands ─────────────────────────────────────────────
 
@@ -430,7 +426,7 @@ bool BDSE::enable() {
         } else {
             sendDeletePacket(*player, oldIds); // I/O outside lock
             --gChunkBorderCount;
-            if (gChunkBorderCount == 0) gLoopSleep.interrupt();
+            if (gChunkBorderCount == 0) gLoopStop = true;
             output.success("§nChunk border§r §4disabled.");
         }
         return;
@@ -525,7 +521,7 @@ bool BDSE::enable() {
             if (hadBorder) {
                 sendDeletePacket(event.self(), ids); // I/O outside lock
                 --gChunkBorderCount;
-                if (gChunkBorderCount == 0) gLoopSleep.interrupt();
+                if (gChunkBorderCount == 0) gLoopStop = true;
             }
         }));
 
@@ -541,10 +537,19 @@ bool BDSE::enable() {
         }));
 
     // Keep health score in sync whenever HP changes.
+    // Guard: only run for players, skip if health is out of valid range,
+    // and skip if new value is 0 or less (death is handled by PlayerDieEvent).
+    // This prevents a deadlock when Bedrock's explosion damage loop fires
+    // MobHealthChangeAfterEvent for multiple actors simultaneously —
+    // modifyPlayerScore would then race on Bedrock's internal scoreboard lock.
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ila::mc::MobHealthChangeAfterEvent>([this](ila::mc::MobHealthChangeAfterEvent& event) {
-            if (!event.self().isPlayer() || event.newValue() > float(event.self().getMaxHealth())) return;
+            if (!event.self().isPlayer()) return;
+
+            float newHp  = event.newValue();
+            float maxHp  = float(event.self().getMaxHealth());
+            if (newHp <= 0.0f || newHp > maxHp) return; // dead or bogus value — skip
 
             ScoreboardId const* id = getOrCreateScoreboardId(static_cast<Player&>(event.self()));
             if (id == nullptr) return;
@@ -552,7 +557,7 @@ bool BDSE::enable() {
             ScoreboardOperationResult result;
             mScoreboard->modifyPlayerScore(
                 result, *id, *mHealthObjective,
-                static_cast<int>(std::ceil(event.newValue())),
+                static_cast<int>(std::ceil(newHp)),
                 PlayerScoreSetFunction::Set);
         }));
 
@@ -591,7 +596,11 @@ bool BDSE::disable() {
     gRunning = false;
 
     gChunkBorderCount = 0;
-    gLoopSleep.interrupt(); // paksa loop keluar tanpa nunggu 40ms
+    gLoopStop = true; // signal loop thread to exit
+    // gLoopThread is detached — just wait up to 200ms for it to notice gLoopStop
+    // before clearing shared state, so it doesn't touch maps mid-clear.
+    for (int i = 0; i < 4 && gLoopRunning; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     {
         std::lock_guard lock(gChunkBorderMtx);
         ChunkBorderList.clear();
