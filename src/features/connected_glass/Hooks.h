@@ -15,7 +15,7 @@
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
 #include "mc/server/ServerLevel.h"
-#include "mc/world/level/storage/LevelSettings.h"
+#include "mc/world/level/LevelSettings.h"
 #include "mc/world/level/Experiments.h"
 
 #include "ll/api/memory/Hook.h"
