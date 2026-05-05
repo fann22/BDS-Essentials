@@ -3,41 +3,28 @@
 #include "GlassTypes.h"
 #include "TileLookup.h"
 
-#include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/definition/BlockDefinitionGroup.h"
 #include "mc/world/level/block/definition/BlockDescription.h"
-#include "mc/world/level/block/definition/BlockStateDefinition.h"
+#include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/Level.h"
 
-#include <string>
 #include <unordered_map>
+#include <optional>
+#include <string>
 
 namespace ConnectedGlass {
 
-// Cache: block ID string → network runtime ID
-// Populated during registerAll(), used by Hooks to build UpdateBlockPacket
-inline std::unordered_map<std::string, uint>& runtimeIdCache() {
-    static std::unordered_map<std::string, uint> cache;
-    return cache;
-}
+// Runtime ID cache: blockId string → network runtime ID
+inline std::unordered_map<std::string, uint> gRuntimeIdCache;
 
-// Register all connected glass custom blocks.
-// One block per (variant, tile) combination — named bdse:cglass_{variant}_{col}_{row}
-// Called once at LevelInitEvent.
 inline void registerAll(Level& level) {
     BlockDefinitionGroup* defGroup = level.getBlockDefinitions();
     if (!defGroup) return;
 
-    auto& cache = runtimeIdCache();
-
     for (size_t vi = 0; vi < VARIANT_COUNT; ++vi) {
         auto variant = static_cast<GlassVariant>(vi);
-
-        for (auto const& [key, tilePos] : tileTable()) {
-            std::string id = "bdse:cglass_"
-                           + variantName(variant)
-                           + "_" + std::to_string(tilePos.col)
-                           + "_" + std::to_string(tilePos.row);
+        for (auto const& def : TILE_TABLE) {
+            std::string id = blockId(variant, def.col, def.row);
 
             BlockDescription desc;
             desc.mIdentifier      = id;
@@ -48,24 +35,18 @@ inline void registerAll(Level& level) {
 
             Block const* defaultState = weakType->mDefaultState;
             if (defaultState) {
-                cache[id] = defaultState->mNetworkId;
+                // TypedStorage<4,4,uint> — access via implicit conversion
+                gRuntimeIdCache[id] = static_cast<uint>(defaultState->mNetworkId);
             }
         }
     }
 }
 
-// Look up runtime ID for a given variant + masks.
-// Returns 0 if not found.
-inline uint getRuntimeId(GlassVariant variant, uint8_t cmask, uint8_t icmask) {
-    auto [col, row] = lookupTile(cmask, icmask);
-    std::string id = "bdse:cglass_"
-                   + variantName(variant)
-                   + "_" + std::to_string(col)
-                   + "_" + std::to_string(row);
-
-    auto& cache = runtimeIdCache();
-    auto it = cache.find(id);
-    if (it == cache.end()) return 0;
+// Separate name from Block's own methods to avoid any ADL confusion
+inline std::optional<uint> lookupRuntimeId(GlassVariant variant, uint8_t cmask, uint8_t icmask) {
+    std::string id = blockId(variant, cmask, icmask);
+    auto it = gRuntimeIdCache.find(id);
+    if (it == gRuntimeIdCache.end()) return std::nullopt;
     return it->second;
 }
 

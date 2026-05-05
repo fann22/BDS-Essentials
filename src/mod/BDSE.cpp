@@ -5,7 +5,6 @@
 
 #include "features/FastLeafDecay.h"
 #include "features/connected_glass/Hooks.h"
-#include "features/connected_glass/BlockRegistrar.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -21,7 +20,6 @@
 #include "ll/api/event/entity/ActorHurtEvent.h"
 
 #include "ll/api/event/world/BlockChangedEvent.h"
-#include "ll/api/event/world/LevelInitEvent.h"
 
 #include "ll/api/event/player/PlayerChatEvent.h"
 #include "ll/api/event/player/PlayerConnectEvent.h"
@@ -502,13 +500,6 @@ bool BDSE::enable() {
             auto message = "§b" + event.self().getRealName() + "§f: " + event.message();
             TextPacket::createRawMessage(message).sendToClients();
             event.cancel();
-        })
-    );
-
-    gListeners.insert(
-        gListeners.begin(),
-        bus.emplaceListener<ll::event::LevelInitEvent>([](ll::event::LevelInitEvent& ev) {
-            ConnectedGlass::registerAll(ev.self());
         })
     );
 
