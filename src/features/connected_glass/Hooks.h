@@ -15,6 +15,8 @@
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
 #include "mc/server/ServerLevel.h"
+#include "mc/world/level/storage/LevelSettings.h"
+#include "mc/world/level/Experiments.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
@@ -37,14 +39,12 @@ static void updateGlassAt(BlockSource& region, BlockPos const& pos) {
     if (!variant.has_value()) return;
 
     auto [cmask, icmask] = ConnectedGlass::computeMask(region, pos, *variant);
-
     auto rid = ConnectedGlass::lookupRuntimeId(*variant, cmask, icmask);
     if (!rid.has_value()) return;
 
     sendFakeBlock(pos, *rid);
 }
 
-// Hook BlockSource::setBlock
 LL_TYPE_INSTANCE_HOOK(
     SetBlockHook,
     ll::memory::HookPriority::Low,
@@ -61,18 +61,14 @@ LL_TYPE_INSTANCE_HOOK(
     if (!result) return result;
 
     updateGlassAt(*this, pos);
-
-    for (auto const& nb : ConnectedGlass::CARDINALS) {
+    for (auto const& nb : ConnectedGlass::CARDINALS)
         updateGlassAt(*this, BlockPos{ pos.x + nb.dx, pos.y, pos.z + nb.dz });
-    }
-    for (auto const& diag : ConnectedGlass::DIAGONALS) {
+    for (auto const& diag : ConnectedGlass::DIAGONALS)
         updateGlassAt(*this, BlockPos{ pos.x + diag.dx, pos.y, pos.z + diag.dz });
-    }
 
     return result;
 }
 
-// Hook LevelChunkPacket::write — scan chunk column after send
 LL_TYPE_INSTANCE_HOOK(
     LevelChunkPacketHook,
     ll::memory::HookPriority::Low,
@@ -83,55 +79,44 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     origin(stream);
 
-    // optional_ref<Level> — check with has_value(), get pointer via ->
     auto levelRef = ll::service::getLevel();
-    if (!levelRef.has_value()) return;
-    Level* level = levelRef.as_ptr();
-    if (!level) return;
+    if (!levelRef) return;
 
-    // BlockPos(ChunkPos, y) → x=chunkX*16, z=chunkZ*16
     BlockPos chunkOrigin{ this->mPos, 0 };
     int const cx = chunkOrigin.x;
     int const cz = chunkOrigin.z;
 
     BlockSource* region = nullptr;
-    level->forEachPlayer([&](Player& player) -> bool {
+    levelRef->forEachPlayer([&](Player& player) -> bool {
         region = &player.getDimensionBlockSource();
         return false;
     });
     if (!region) return;
 
-    constexpr int CHUNK_SIZE  = 16;
-    constexpr int WORLD_MIN_Y = -64;
-    constexpr int WORLD_MAX_Y = 319;
-
-    for (int lx = 0; lx < CHUNK_SIZE; ++lx) {
-        for (int lz = 0; lz < CHUNK_SIZE; ++lz) {
-            for (int y = WORLD_MIN_Y; y <= WORLD_MAX_Y; ++y) {
+    constexpr int S = 16, MINY = -64, MAXY = 319;
+    for (int lx = 0; lx < S; ++lx)
+        for (int lz = 0; lz < S; ++lz)
+            for (int y = MINY; y <= MAXY; ++y)
                 updateGlassAt(*region, BlockPos{ cx + lx, y, cz + lz });
-            }
-        }
-    }
 }
 
-// Hook ServerLevel::initialize — fires once when level is fully loaded
-// Replaces ll::event::LevelInitEvent which is not available in LL 26.x
+// Use exact signature from ServerLevel.h
 LL_TYPE_INSTANCE_HOOK(
     LevelInitHook,
     ll::memory::HookPriority::Normal,
     ServerLevel,
     &ServerLevel::$initialize,
     bool,
-    std::string const&   levelName,
-    LevelSettings const& levelSettings,
-    Experiments const&   experiments,
-    std::string const*   levelId,
-    std::optional<std::reference_wrapper<class StorageVersion>> storageVersion
+    ::std::string const&   levelName,
+    ::LevelSettings const& levelSettings,
+    ::Experiments const&   experiments,
+    ::std::string const*   levelId,
+    ::std::optional<::std::reference_wrapper<
+        ::std::unordered_map<::std::string, ::std::unique_ptr<::BiomeJsonDocumentGlueResolvedBiomeData>>>>
+        biomeIdToResolvedData
 ) {
-    bool result = origin(levelName, levelSettings, experiments, levelId, storageVersion);
-    if (result) {
-        ConnectedGlass::registerAll(*this);
-    }
+    bool result = origin(levelName, levelSettings, experiments, levelId, biomeIdToResolvedData);
+    if (result) ConnectedGlass::registerAll(*this);
     return result;
 }
 
