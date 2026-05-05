@@ -4,6 +4,8 @@
 #include "gsl/pointers"
 
 #include "features/FastLeafDecay.h"
+#include "features/connected_glass/Hooks.h"
+#include "features/connected_glass/BlockRegistrar.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -19,6 +21,7 @@
 #include "ll/api/event/entity/ActorHurtEvent.h"
 
 #include "ll/api/event/world/BlockChangedEvent.h"
+#include "ll/api/event/world/LevelInitEvent.h"
 
 #include "ll/api/event/player/PlayerChatEvent.h"
 #include "ll/api/event/player/PlayerConnectEvent.h"
@@ -389,6 +392,7 @@ bool BDSE::enable() {
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
     PlayerAddLevelHook::hook();
+    ConnectedGlass::registerHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
 
@@ -501,6 +505,13 @@ bool BDSE::enable() {
         })
     );
 
+    gListeners.insert(
+        gListeners.begin(),
+        bus.emplaceListener<ll::event::LevelInitEvent>([](ll::event::LevelInitEvent& ev) {
+            ConnectedGlass::registerAll(ev.self());
+        })
+    );
+
     // getSelf().getLogger().info("loaded.");
     return true;
 }
@@ -513,6 +524,7 @@ bool BDSE::disable() {
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
     PlayerAddLevelHook::unhook();
+    ConnectedGlass::unregisterHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
 
