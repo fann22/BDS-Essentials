@@ -16,7 +16,7 @@
 #include "mc/world/level/Level.h"
 #include "mc/server/ServerLevel.h"
 #include "mc/world/level/LevelSettings.h"
-#include "mc/world/level/Experiments.h"
+#include "mc/world/level/storage/Experiments.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
