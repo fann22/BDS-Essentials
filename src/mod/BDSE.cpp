@@ -4,6 +4,7 @@
 #include "gsl/pointers"
 
 #include "features/FastLeafDecay.h"
+#include "features/PistonQuickPulse.h"
 // #include "features/connected_glass/Hooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -94,7 +95,6 @@
 
 #include "mc/world/level/block/actor/PistonBlockActor.h"
 #include "mc/world/level/block/actor/PistonState.h"
-#include "PistonQuickPulse.h"
 
 ShapeDataPayload::ShapeDataPayload() { mNetworkId = 0; }
 

@@ -3,7 +3,7 @@
 #include <unordered_set>
 #include "mc/world/level/BlockPos.h"
 
-namespace bds_essentials {
+namespace bds_essentials::features::piston_quick_pulse {
 
 struct BlockPosHash {
     size_t operator()(const BlockPos& p) const {
