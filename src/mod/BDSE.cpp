@@ -210,7 +210,7 @@ LL_TYPE_INSTANCE_HOOK(
                  && this->mState    == PistonState::Expanding
                  && this->mNewState == PistonState::Retracting
                  && this->mProgress < 1.0f
-                 && !this->mAttachedBlocks.get().empty()
+                 && !this->mAttachedBlocks.get().empty();
 
     if (shouldQuickPulse) {
         this->mSticky = false;
