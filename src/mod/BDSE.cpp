@@ -4,7 +4,7 @@
 #include "gsl/pointers"
 
 #include "features/FastLeafDecay.h"
-#include "features/connected_glass/Hooks.h"
+// #include "features/connected_glass/Hooks.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -91,6 +91,10 @@
 #include "mc/network/packet/LineDataPayload.h"
 #include "mc/scripting/modules/minecraft/debugdrawer/ScriptDebugShapeType.h"
 #include "mc/network/packet/cerealize/core/SerializationMode.h"
+
+#include "mc/world/level/block/actor/PistonBlockActor.h"
+#include "mc/world/level/block/actor/PistonState.h"
+#include "PistonQuickPulse.h"
 
 ShapeDataPayload::ShapeDataPayload() { mNetworkId = 0; }
 
@@ -192,6 +196,29 @@ void updateChunkBorder(Player& player) {
         std::lock_guard lock(gChunkMtx);
         gShapeIds[guid] = std::move(newIds);
     }
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PistonQuickPulseHook,
+    ll::memory::HookPriority::Normal,
+    PistonBlockActor,
+    &PistonBlockActor::$tick,
+    void,
+    BlockSource& region
+) {
+    bool isQuickPulse = this->mSticky
+                     && this->mState    == PistonState::Expanding
+                     && this->mNewState == PistonState::Retracting
+                     && this->mProgress < 1.0f;
+
+    if (isQuickPulse) {
+        this->mSticky = false;
+        origin(region);
+        this->mSticky = true;
+        return;
+    }
+
+    origin(region);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -390,7 +417,8 @@ bool BDSE::enable() {
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
     PlayerAddLevelHook::hook();
-    ConnectedGlass::registerHooks();
+    PistonQuickPulseHook::hook();
+    // ConnectedGlass::registerHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
 
@@ -515,7 +543,8 @@ bool BDSE::disable() {
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
     PlayerAddLevelHook::unhook();
-    ConnectedGlass::unregisterHooks();
+    PistonQuickPulseHook::unhook();
+    // ConnectedGlass::unregisterHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
 
