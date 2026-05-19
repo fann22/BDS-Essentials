@@ -206,12 +206,13 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     BlockSource& region
 ) {
-    bool isQuickPulse = this->mSticky
-                     && this->mState    == PistonState::Expanding
-                     && this->mNewState == PistonState::Retracting
-                     && this->mProgress < 1.0f;
+    bool shouldQuickPulse = this->mSticky
+                 && this->mState    == PistonState::Expanding
+                 && this->mNewState == PistonState::Retracting
+                 && this->mProgress < 1.0f
+                 && !this->mAttachedBlocks.empty();
 
-    if (isQuickPulse) {
+    if (shouldQuickPulse) {
         this->mSticky = false;
         origin(region);
         this->mSticky = true;
