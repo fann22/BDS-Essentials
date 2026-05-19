@@ -144,10 +144,10 @@ void updateChunkBorder(Player& player) {
 
     removeChunkBorder(player);
 
-    float minX = (chunkX * 16);
-    float minZ = (chunkZ * 16);
-    float maxX = (chunkX * 16) + 16.0f;
-    float maxZ = (chunkZ * 16) + 16.0f;
+    float minX = (chunkX * 16.0f);
+    float minZ = (chunkZ * 16.0f);
+    float maxX = (chunkX * 16.0f) + 16.0f;
+    float maxZ = (chunkZ * 16.0f) + 16.0f;
     float minY = -64.0f;
     float maxY = 320.0f;
 
