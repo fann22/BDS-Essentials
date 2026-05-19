@@ -20,10 +20,10 @@
 #include "mc/world/actor/player/SerializedSkinRef.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/Tick.h"
-
+/*
 #include "gmlib/mc/network/BinaryStream.h"
 #include "gmlib/mc/world/actor/Player.h"
-
+*/
 namespace bds_essentials::freeCamera {
 
 void EnableFreeCameraPacket(Player* pl) {
@@ -40,7 +40,7 @@ void SendFakePlayerPacket(Player* pl) {
     auto randomUuid       = mce::UUID::random();
     pkt1.mUuid            = randomUuid;
     pl->sendNetworkPacket(pkt1);
-
+/*
     auto& ref = *pl->mSkin;
     if (!ref.mSkinImpl) return;
 
@@ -56,7 +56,7 @@ void SendFakePlayerPacket(Player* pl) {
         *(gmlib::GMPlayer*)pl,
         NetworkPeer::Reliability::ReliableOrdered,
         Compressibility::Compressible
-    );
+    );*/
 }
 
 void DisableFreeCameraPacket(Player* pl) {

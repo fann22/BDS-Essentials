@@ -2,7 +2,7 @@ add_rules("mode.debug", "mode.release")
 
 add_repositories("levimc-repo https://github.com/LiteLDev/xmake-repo.git")
 add_repositories("miracleforest-repo https://github.com/MiracleForest/xmake-repo.git")
-add_repositories("groupmountain-repo https://github.com/GroupMountain/xmake-repo.git")
+-- add_repositories("groupmountain-repo https://github.com/GroupMountain/xmake-repo.git")
 
 
 option("target_type")
@@ -17,7 +17,7 @@ option_end()
 add_requires("levilamina", {configs = {target_type = get_config("target_type")}})
 add_requires("levibuildscript")
 add_requires("ilistenattentively")
-add_requires("gmlib")
+-- add_requires("gmlib")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
