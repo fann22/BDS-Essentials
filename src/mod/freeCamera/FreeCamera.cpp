@@ -20,10 +20,7 @@
 #include "mc/world/actor/player/SerializedSkinRef.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/Tick.h"
-/*
-#include "gmlib/mc/network/BinaryStream.h"
-#include "gmlib/mc/world/actor/Player.h"
-*/
+
 namespace bds_essentials::freeCamera {
 
 void EnableFreeCameraPacket(Player* pl) {
@@ -40,23 +37,6 @@ void SendFakePlayerPacket(Player* pl) {
     auto randomUuid       = mce::UUID::random();
     pkt1.mUuid            = randomUuid;
     pl->sendNetworkPacket(pkt1);
-/*
-    auto& ref = *pl->mSkin;
-    if (!ref.mSkinImpl) return;
-
-    SerializedSkinImpl& skinImpl = ref.mSkinImpl->mObject;
-    gmlib::GMBinaryStream bs;
-    bs.writePacketHeader(MinecraftPacketIds::PlayerSkin);
-    bs.writeUuid(randomUuid);
-    bs.writeSkin(skinImpl);
-    bs.writeString("");
-    bs.writeString("");
-    bs.writeBool(true);
-    bs.sendTo(
-        *(gmlib::GMPlayer*)pl,
-        NetworkPeer::Reliability::ReliableOrdered,
-        Compressibility::Compressible
-    );*/
 }
 
 void DisableFreeCameraPacket(Player* pl) {
@@ -76,7 +56,7 @@ void DisableFreeCameraPacket(Player* pl) {
 }
 
 void FreeCameraManager::EnableFreeCamera(Player* pl) {
-    FreeCameraManager::getInstance().FreeCamList.insert(pl->getNetworkIdentifier().mGuid.g);
+    FreeCameraManager::getInstance().insert(pl->getNetworkIdentifier().mGuid.g);
     EnableFreeCameraPacket(pl);
     SendFakePlayerPacket(pl);
 }
@@ -85,7 +65,7 @@ void FreeCameraManager::DisableFreeCamera(Player* pl) {
     auto pos   = pl->getFeetPos();
     auto dimid = pl->getDimensionId();
 
-    FreeCameraManager::getInstance().FreeCamList.erase(pl->getNetworkIdentifier().mGuid.g);
+    FreeCameraManager::getInstance().erase(pl->getNetworkIdentifier().mGuid.g);
     DisableFreeCameraPacket(pl);
     pl->teleport(pos, dimid);
 }
@@ -99,7 +79,7 @@ LL_TYPE_INSTANCE_HOOK(
     NetworkIdentifier const&     id,
     PlayerAuthInputPacket const& pkt
 ) {
-    if (FreeCameraManager::getInstance().FreeCamList.contains(id.mGuid.g)) {
+    if (FreeCameraManager::getInstance().contains(id.mGuid.g)) {
         return;
     } else {
         origin(id, pkt);
@@ -115,7 +95,7 @@ LL_TYPE_INSTANCE_HOOK(
     ::GameType gamemode
 ) {
     origin(gamemode);
-    if (FreeCameraManager::getInstance().FreeCamList.contains(getNetworkIdentifier().mGuid.g)) {
+    if (FreeCameraManager::getInstance().contains(getNetworkIdentifier().mGuid.g)) {
         FreeCameraManager::DisableFreeCamera(this);
     }
 }
@@ -133,7 +113,7 @@ LL_TYPE_INSTANCE_HOOK(
     if (this->isType(ActorType::Player) && res != 0) {
         auto pl = (Player*)this;
         if ((pl->isSurvival() || pl->isAdventure())
-            && FreeCameraManager::getInstance().FreeCamList.contains(pl->getNetworkIdentifier().mGuid.g)) {
+            && FreeCameraManager::getInstance().contains(pl->getNetworkIdentifier().mGuid.g)) {
             FreeCameraManager::DisableFreeCamera(pl);
         }
     }
@@ -148,7 +128,7 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     class ActorDamageSource const& a1
 ) {
-    if (FreeCameraManager::getInstance().FreeCamList.contains(getNetworkIdentifier().mGuid.g)) {
+    if (FreeCameraManager::getInstance().contains(getNetworkIdentifier().mGuid.g)) {
         FreeCameraManager::DisableFreeCamera(this);
     }
     return origin(a1);
@@ -161,7 +141,7 @@ LL_TYPE_INSTANCE_HOOK(
     &ServerPlayer::disconnect,
     void
 ) {
-    FreeCameraManager::getInstance().FreeCamList.erase(getNetworkIdentifier().mGuid.g);
+    FreeCameraManager::getInstance().erase(getNetworkIdentifier().mGuid.g);
     return origin();
 }
 

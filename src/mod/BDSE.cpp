@@ -101,10 +101,22 @@ ShapeDataPayload::ShapeDataPayload() { mNetworkId = 0; }
 namespace bds_essentials {
 
 static std::atomic<uint64_t> sNextShapeId{UINT64_MAX};
-static std::unordered_map<unsigned long long, std::pair<int,int>>        gLastChunk;
-static std::unordered_map<unsigned long long, std::vector<uint64_t>>     gShapeIds;
-static std::mutex                                                         gChunkMtx;
 
+// ---------------------------------------------------------------------------
+// Chunk border state
+//
+// All four maps are guarded by gChunkMtx.  The rule is simple: hold the lock
+// whenever reading or writing any of them.  Functions that need to send
+// packets (removeChunkBorder / updateChunkBorder) release the lock *before*
+// touching the network, then re-acquire if they need to write back results.
+// ---------------------------------------------------------------------------
+static std::unordered_map<unsigned long long, std::pair<int,int>>    gLastChunk;
+static std::unordered_map<unsigned long long, std::vector<uint64_t>> gShapeIds;
+static std::unordered_set<unsigned long long>                        gChunkBorderSet;
+static std::mutex                                                     gChunkMtx;
+
+// Remove the DebugDrawer shapes for `player` and erase them from gShapeIds.
+// Must NOT be called while holding gChunkMtx.
 void removeChunkBorder(Player& player) {
     auto guid = player.getNetworkIdentifier().mGuid.g;
 
@@ -128,6 +140,8 @@ void removeChunkBorder(Player& player) {
     pkt.sendTo(player);
 }
 
+// Draw (or redraw) the chunk border for `player` if the chunk has changed.
+// Must NOT be called while holding gChunkMtx.
 void updateChunkBorder(Player& player) {
     Vec3 pos   = player.getPosition();
     int chunkX = (int)std::floor(pos.x / 16);
@@ -142,6 +156,7 @@ void updateChunkBorder(Player& player) {
         gLastChunk[guid] = {chunkX, chunkZ};
     }
 
+    // Remove old shapes first (lock is released inside removeChunkBorder).
     removeChunkBorder(player);
 
     float minX = (chunkX * 16.0f);
@@ -182,7 +197,7 @@ void updateChunkBorder(Player& player) {
         addLine({maxX, minY, z}, {maxX, maxY, z}); // East
     }
 
-    // Horizontal rings every 2 block (full height)
+    // Horizontal rings every 2 blocks (full height)
     for (float y = minY; y <= maxY; y += 2.0f) {
         addLine({minX, y, minZ}, {maxX, y, minZ}); // North
         addLine({minX, y, maxZ}, {maxX, y, maxZ}); // South
@@ -198,7 +213,17 @@ void updateChunkBorder(Player& player) {
     }
 }
 
-LL_TYPE_INSTANCE_HOOK(
+// Full cleanup for one player: remove visuals, erase from all maps.
+// Must NOT be called while holding gChunkMtx.
+void cleanupPlayerChunkBorder(Player& player) {
+    auto guid = player.getNetworkIdentifier().mGuid.g;
+    removeChunkBorder(player); // erases gShapeIds[guid], lock-safe internally
+    std::lock_guard lock(gChunkMtx);
+    gChunkBorderSet.erase(guid);
+    gLastChunk.erase(guid);
+}
+
+/*LL_TYPE_INSTANCE_HOOK(
     PistonQuickPulseHook,
     ll::memory::HookPriority::Normal,
     PistonBlockActor,
@@ -220,7 +245,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
 
     origin(region);
-}
+}*/
 
 LL_TYPE_INSTANCE_HOOK(
     PlayerAddLevelHook,
@@ -237,7 +262,7 @@ LL_TYPE_INSTANCE_HOOK(
     BaseAttributeMap&    attrMap = const_cast<BaseAttributeMap&>(*this->getAttributes());
     AttributeInstanceRef ref     = attrMap.getMutableInstance(Player::LEVEL().mIDValue);
     int                  fixLvl  = std::max(0, int(ref.mPtr->mCurrentValue) + lvl);
-    // using std::max() cuz the value might be negative, we definitely don't want that to happend.
+    // using std::max() cuz the value might be negative, we definitely don't want that to happen.
 
     if (scoreboard && xpObjective) {
         ScoreboardId const& id = scoreboard->getScoreboardId(*this); // *this == Player
@@ -300,7 +325,6 @@ static std::vector<std::string> gMotdMessages = {
 };
 static std::atomic<int>  gMotdIndex = 0;
 static std::atomic<bool> gRunning   = false;
-static std::unordered_set<unsigned long long> ChunkBorderList;
 
 bool BDSE::load() {
     // getSelf().getLogger().debug("Loading...");
@@ -309,20 +333,27 @@ bool BDSE::load() {
 
 bool BDSE::enable() {
     gRunning = true;
+
+    // MOTD rotator — only reads gMotdMessages (never mutated after init), safe.
     ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
         while (gRunning) {
             gMotdIndex = (gMotdIndex + 1) % gMotdMessages.size();
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
         }
     });
+
+    // Chunk-border ticker — dispatches work onto the server thread.
     ll::thread::ThreadPoolExecutor::getDefault().execute([]() {
         while (gRunning) {
             ll::thread::ServerThreadExecutor::getDefault().execute([]() {
                 ll::service::getLevel()->forEachPlayer([](Player& player) -> bool {
                     try {
-                        auto guid = player.getNetworkIdentifier().mGuid.g;
+                        auto guid   = player.getNetworkIdentifier().mGuid.g;
                         bool active = false;
-                        { std::lock_guard lock(gChunkMtx); active = ChunkBorderList.count(guid) > 0; }
+                        {
+                            std::lock_guard lock(gChunkMtx);
+                            active = gChunkBorderSet.count(guid) > 0;
+                        }
                         if (active) updateChunkBorder(player);
                     } catch (std::exception& e) {
                         BDSE::getInstance().getSelf().getLogger().error("drawChunkGrid: {}", e.what());
@@ -336,6 +367,7 @@ bool BDSE::enable() {
     });
 
     freeCamera::FreeCameraManager::freecameraHook(true);
+
     auto& cmd = ll::command::CommandRegistrar::getInstance(false).getOrCreateCommand("freecamera", "Toggle freecam.");
     ll::service::getCommandRegistry()->registerAlias("freecamera", "fc");
     cmd.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
@@ -360,6 +392,7 @@ bool BDSE::enable() {
             return;
         }
     );
+
     auto& cmd2 = ll::command::CommandRegistrar::getInstance(false).getOrCreateCommand("chunkborder", "Toggle chunk border.");
     ll::service::getCommandRegistry()->registerAlias("chunkborder", "cb");
     cmd2.overload().execute([&](CommandOrigin const& origin, CommandOutput& output) {
@@ -374,18 +407,30 @@ bool BDSE::enable() {
                 return;
             }
             auto guid = player->getNetworkIdentifier().mGuid.g;
-            bool wasAbsent = false;
-            { std::lock_guard lock(gChunkMtx); wasAbsent = ChunkBorderList.insert(guid).second; }
-            if (wasAbsent) {
+
+            bool wasInserted = false;
+            {
+                std::lock_guard lock(gChunkMtx);
+                wasInserted = gChunkBorderSet.insert(guid).second;
+            }
+
+            if (wasInserted) {
+                // First activation — draw immediately.
                 updateChunkBorder(*player);
                 output.success("Chunk border enabled.");
             } else {
-                { std::lock_guard lock(gChunkMtx); ChunkBorderList.erase(guid); }
-                removeChunkBorder(*player); // acquires lock internally
+                // Already active — disable atomically: erase from set first so
+                // the ticker thread stops queuing updates, then clean up visuals.
+                {
+                    std::lock_guard lock(gChunkMtx);
+                    gChunkBorderSet.erase(guid);
+                }
+                // removeChunkBorder erases gShapeIds; cleanupPlayerChunkBorder
+                // also erases gLastChunk.  Call the helper for full cleanup.
+                removeChunkBorder(*player);
                 {
                     std::lock_guard lock(gChunkMtx);
                     gLastChunk.erase(guid);
-                    // gShapeIds already erased inside removeChunkBorder
                 }
                 output.success("Chunk border disabled.");
             }
@@ -418,7 +463,7 @@ bool BDSE::enable() {
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
     PlayerAddLevelHook::hook();
-    PistonQuickPulseHook::hook();
+    // PistonQuickPulseHook::hook();
     // ConnectedGlass::registerHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
@@ -456,14 +501,18 @@ bool BDSE::enable() {
     gListeners.insert(
         gListeners.begin(),
         bus.emplaceListener<ll::event::PlayerDisconnectEvent>([this](ll::event::PlayerDisconnectEvent& event) {
-            ScoreboardId const* id = getOrCreateScoreboardId(event.self());
+            Player& player = event.self();
+            auto    guid   = player.getNetworkIdentifier().mGuid.g;
+
+            ScoreboardId const* id = getOrCreateScoreboardId(player);
             if (id != nullptr) mScoreboard->resetPlayerScore(*id);
-            auto guid = event.self().getNetworkIdentifier().mGuid.g;
-            removeChunkBorder(event.self()); // acquires lock internally
+
+            // Full chunk-border cleanup: visuals + all three maps.
+            removeChunkBorder(player);          // erases gShapeIds[guid]
             {
                 std::lock_guard lock(gChunkMtx);
+                gChunkBorderSet.erase(guid);
                 gLastChunk.erase(guid);
-                // gShapeIds already erased inside removeChunkBorder
             }
         })
     );
@@ -488,7 +537,6 @@ bool BDSE::enable() {
         gListeners.begin(),
         bus.emplaceListener<ila::mc::MobHealthChangeAfterEvent>([this](ila::mc::MobHealthChangeAfterEvent& event) {
             if (!event.self().isPlayer() || event.newValue() > float(event.self().getMaxHealth())) return;
-            // BDSE::getInstance().getSelf().getLogger().info("{} -> {}", event.oldValue(), event.newValue());
 
             ScoreboardId const* id = getOrCreateScoreboardId(static_cast<Player&>(event.self()));
             if (id == nullptr) return;
@@ -544,7 +592,7 @@ bool BDSE::disable() {
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
     PlayerAddLevelHook::unhook();
-    PistonQuickPulseHook::unhook();
+    // PistonQuickPulseHook::unhook();
     // ConnectedGlass::unregisterHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
@@ -553,8 +601,19 @@ bool BDSE::disable() {
         bus.removeListener(listener);
         listener.reset();
     }
-
     gListeners.clear();
+
+    // Clear all chunk-border state so a plugin reload starts clean.
+    // Note: we intentionally do NOT send removal packets here — by the time
+    // disable() is called the server may be shutting down and all players are
+    // already disconnected.  If it's a hot-reload scenario the client will
+    // eventually time-out the shapes on its own.
+    {
+        std::lock_guard lock(gChunkMtx);
+        gChunkBorderSet.clear();
+        gLastChunk.clear();
+        gShapeIds.clear();
+    }
 
     mScoreboard      = nullptr;
     mHealthObjective = nullptr;

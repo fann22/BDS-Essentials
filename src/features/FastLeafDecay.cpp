@@ -29,7 +29,13 @@ static constexpr int MAX_PENDING = 512;
 void addLeavesBlock(BlockSource& region, BlockPos const& pos);
 bool isLeaves(Block const& block);
 
-static ll::SmallDenseMap<BlockPos, std::shared_ptr<ll::data::CancellableCallback>> gCallbacks;
+// gCallbacks is only ever touched from the server thread (hooks fire on server
+// thread, executeAfter callbacks run on ServerThreadExecutor which is also the
+// server thread).  The one exception is disable(), which may be called from a
+// different thread.  We protect it with a mutex so disable() can safely drain
+// the map without racing against an in-flight callback.
+static std::mutex                                                                    gCallbacksMtx;
+static ll::SmallDenseMap<BlockPos, std::shared_ptr<ll::data::CancellableCallback>>  gCallbacks;
 
 LL_TYPE_INSTANCE_HOOK(
     LeavesBlockRemoveHook,
@@ -62,17 +68,30 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
 
     for (auto offset : BoundingBox(-1, 1).forEachPos()) {
         auto newPos = pos.add(offset);
-        if (!isLeaves(region.getBlock(newPos)) || gCallbacks.contains(newPos)) continue;
-        if (gCallbacks.size() >= MAX_PENDING) return;
+        if (!isLeaves(region.getBlock(newPos))) continue;
 
-        gCallbacks[newPos] = ll::thread::ServerThreadExecutor::getDefault().executeAfter(
+        {
+            std::lock_guard lock(gCallbacksMtx);
+            if (gCallbacks.contains(newPos))       continue;
+            if (gCallbacks.size() >= MAX_PENDING)  return;
+        }
+
+        auto cb = ll::thread::ServerThreadExecutor::getDefault().executeAfter(
             [dimId, newPos]() -> void {
                 optional_ref<Level> level = ll::service::getLevel();
-                if (!level) { gCallbacks.erase(newPos); return; }
+                if (!level) {
+                    std::lock_guard lock(gCallbacksMtx);
+                    gCallbacks.erase(newPos);
+                    return;
+                }
 
                 WeakRef<Dimension>        weakDim   = level->getDimension(dimId);
                 StackRefResult<Dimension> dimension = weakDim.lock();
-                if (!dimension) { gCallbacks.erase(newPos); return; }
+                if (!dimension) {
+                    std::lock_guard lock(gCallbacksMtx);
+                    gCallbacks.erase(newPos);
+                    return;
+                }
 
                 BlockSource& regionRef = dimension->getBlockSourceFromMainChunkSource();
                 Block const& block     = regionRef.getBlock(newPos);
@@ -82,10 +101,15 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
                     BlockEvents::BlockRandomTickEvent event(newPos, regionRef, Random::mThreadLocalRandom());
                     static_cast<LeavesBlock const&>(*block.mBlockType).randomTick(event);
                 }
+
+                std::lock_guard lock(gCallbacksMtx);
                 gCallbacks.erase(newPos);
             },
             ll::chrono::ticks(ll::random_utils::rand(DECAY_TICKS_MIN, DECAY_TICKS_MAX))
         );
+
+        std::lock_guard lock(gCallbacksMtx);
+        gCallbacks[newPos] = std::move(cb);
     }
 } catch (...) {}
 
@@ -101,8 +125,14 @@ void enable() {
 void disable() {
     LeavesBlockRemoveHook::unhook();
     LogBlockRemoveHook::unhook();
-    for (auto& cb : gCallbacks)
-        if (cb.second) cb.second->cancel();
+
+    // Cancel all pending callbacks and clear the map under the lock so that
+    // any in-flight callback that tries to erase its own entry sees a
+    // consistent state (it will simply erase nothing from an already-cleared
+    // map, which is safe).
+    std::lock_guard lock(gCallbacksMtx);
+    for (auto& [pos, cb] : gCallbacks)
+        if (cb) cb->cancel();
     gCallbacks.clear();
 }
 
