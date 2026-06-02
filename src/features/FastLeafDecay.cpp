@@ -10,6 +10,7 @@
 #include <ll/api/thread/ServerThreadExecutor.h>
 #include <ll/api/utils/RandomUtils.h>
 #include <mc/util/Random.h>
+#include <mc/world/level/Level.h>
 #include <mc/world/level/BlockPos.h>
 #include <mc/world/level/BlockSource.h>
 #include <mc/world/level/block/Block.h>
@@ -58,7 +59,7 @@ LL_TYPE_INSTANCE_HOOK(
 
 void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
     auto dimId = region.getDimension().mId;
-    
+
     for (auto offset : BoundingBox(-1, 1).forEachPos()) {
         auto newPos = pos.add(offset);
         if (!isLeaves(region.getBlock(newPos)) || gCallbacks.contains(newPos)) continue;
@@ -66,14 +67,18 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
 
         gCallbacks[newPos] = ll::thread::ServerThreadExecutor::getDefault().executeAfter(
             [dimId, newPos]() -> void {
-                auto level = ll::service::getLevel();
+                optional_ref<Level> level = ll::service::getLevel();
                 if (!level) { gCallbacks.erase(newPos); return; }
 
-                auto* dimension = level->getDimension(dimId);
+                WeakRef<Dimension>        weakDim   = level->getDimension(dimId);
+                StackRefResult<Dimension> dimension = weakDim.lock();
                 if (!dimension) { gCallbacks.erase(newPos); return; }
 
-                auto& regionRef = dimension->getBlockSourceFromMainChunkSource();
-                if (auto& block = regionRef.getBlock(newPos); isLeaves(block)) {
+                BlockSource& regionRef = dimension->getBlockSourceFromMainChunkSource();
+                Block const& block     = regionRef.getBlock(newPos);
+                weakDim.reset();
+
+                if (isLeaves(block)) {
                     BlockEvents::BlockRandomTickEvent event(newPos, regionRef, Random::mThreadLocalRandom());
                     static_cast<LeavesBlock const&>(*block.mBlockType).randomTick(event);
                 }
