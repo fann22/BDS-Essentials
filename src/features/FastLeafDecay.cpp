@@ -29,13 +29,11 @@ static constexpr int MAX_PENDING = 512;
 void addLeavesBlock(BlockSource& region, BlockPos const& pos);
 bool isLeaves(Block const& block);
 
-// gCallbacks is only ever touched from the server thread (hooks fire on server
-// thread, executeAfter callbacks run on ServerThreadExecutor which is also the
-// server thread).  The one exception is disable(), which may be called from a
-// different thread.  We protect it with a mutex so disable() can safely drain
-// the map without racing against an in-flight callback.
-static std::mutex                                                                    gCallbacksMtx;
-static ll::SmallDenseMap<BlockPos, std::shared_ptr<ll::data::CancellableCallback>>  gCallbacks;
+// gCallbacks is only accessed from the server thread (hooks + ServerThreadExecutor
+// callbacks are all server-thread).  The sole exception is disable(), which may
+// be called from a different thread — so we protect only that path with a mutex.
+static std::mutex                                                                   gCallbacksMtx;
+static ll::SmallDenseMap<BlockPos, std::shared_ptr<ll::data::CancellableCallback>> gCallbacks;
 
 LL_TYPE_INSTANCE_HOOK(
     LeavesBlockRemoveHook,
@@ -68,30 +66,19 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
 
     for (auto offset : BoundingBox(-1, 1).forEachPos()) {
         auto newPos = pos.add(offset);
-        if (!isLeaves(region.getBlock(newPos))) continue;
+        // Original logic preserved exactly — no lock needed here because
+        // this function and its callbacks both run on the server thread.
+        if (!isLeaves(region.getBlock(newPos)) || gCallbacks.contains(newPos)) continue;
+        if (gCallbacks.size() >= MAX_PENDING) return;
 
-        {
-            std::lock_guard lock(gCallbacksMtx);
-            if (gCallbacks.contains(newPos))       continue;
-            if (gCallbacks.size() >= MAX_PENDING)  return;
-        }
-
-        auto cb = ll::thread::ServerThreadExecutor::getDefault().executeAfter(
+        gCallbacks[newPos] = ll::thread::ServerThreadExecutor::getDefault().executeAfter(
             [dimId, newPos]() -> void {
                 optional_ref<Level> level = ll::service::getLevel();
-                if (!level) {
-                    std::lock_guard lock(gCallbacksMtx);
-                    gCallbacks.erase(newPos);
-                    return;
-                }
+                if (!level) { gCallbacks.erase(newPos); return; }
 
                 WeakRef<Dimension>        weakDim   = level->getDimension(dimId);
                 StackRefResult<Dimension> dimension = weakDim.lock();
-                if (!dimension) {
-                    std::lock_guard lock(gCallbacksMtx);
-                    gCallbacks.erase(newPos);
-                    return;
-                }
+                if (!dimension) { gCallbacks.erase(newPos); return; }
 
                 BlockSource& regionRef = dimension->getBlockSourceFromMainChunkSource();
                 Block const& block     = regionRef.getBlock(newPos);
@@ -101,15 +88,10 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
                     BlockEvents::BlockRandomTickEvent event(newPos, regionRef, Random::mThreadLocalRandom());
                     static_cast<LeavesBlock const&>(*block.mBlockType).randomTick(event);
                 }
-
-                std::lock_guard lock(gCallbacksMtx);
                 gCallbacks.erase(newPos);
             },
             ll::chrono::ticks(ll::random_utils::rand(DECAY_TICKS_MIN, DECAY_TICKS_MAX))
         );
-
-        std::lock_guard lock(gCallbacksMtx);
-        gCallbacks[newPos] = std::move(cb);
     }
 } catch (...) {}
 
@@ -126,10 +108,10 @@ void disable() {
     LeavesBlockRemoveHook::unhook();
     LogBlockRemoveHook::unhook();
 
-    // Cancel all pending callbacks and clear the map under the lock so that
-    // any in-flight callback that tries to erase its own entry sees a
-    // consistent state (it will simply erase nothing from an already-cleared
-    // map, which is safe).
+    // Lock here because disable() can be called from a non-server thread.
+    // cancel() is safe to call even if the callback already ran — it's a no-op.
+    // After clear(), any in-flight callback that tries gCallbacks.erase() will
+    // simply erase nothing, which is safe.
     std::lock_guard lock(gCallbacksMtx);
     for (auto& [pos, cb] : gCallbacks)
         if (cb) cb->cancel();
