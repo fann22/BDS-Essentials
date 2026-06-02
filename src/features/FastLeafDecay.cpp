@@ -21,8 +21,8 @@ namespace bds_essentials::features::fast_leaf_decay {
 
 static constexpr int DECAY_TICKS_MIN = 2;
 static constexpr int DECAY_TICKS_MAX = 10;
+static constexpr int MAX_PENDING = 512;
 
-// Forward declarations
 void addLeavesBlock(BlockSource& region, BlockPos const& pos);
 bool isLeaves(Block const& block);
 
@@ -55,15 +55,24 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
+    auto dimId = region.getDimension().mId;
+    
     for (auto offset : BoundingBox(-1, 1).forEachPos()) {
         auto newPos = pos.add(offset);
         if (!isLeaves(region.getBlock(newPos)) || gCallbacks.contains(newPos)) continue;
+        if (gCallbacks.size() >= MAX_PENDING) return;
 
-        auto* regionPtr = &region;
         gCallbacks[newPos] = ll::thread::ServerThreadExecutor::getDefault().executeAfter(
-            [regionPtr, newPos]() -> void {
-                if (auto& block = regionPtr->getBlock(newPos); isLeaves(block)) {
-                    BlockEvents::BlockRandomTickEvent event(newPos, *regionPtr, Random::mThreadLocalRandom());
+            [dimId, newPos]() -> void {
+                auto* level = ll::service::getLevel();
+                if (!level) { gCallbacks.erase(newPos); return; }
+
+                auto* dimension = level->getDimension(dimId);
+                if (!dimension) { gCallbacks.erase(newPos); return; }
+
+                auto& regionRef = dimension->getBlockSourceFromMainChunkSource();
+                if (auto& block = regionRef.getBlock(newPos); isLeaves(block)) {
+                    BlockEvents::BlockRandomTickEvent event(newPos, regionRef, Random::mThreadLocalRandom());
                     static_cast<LeavesBlock const&>(*block.mBlockType).randomTick(event);
                 }
                 gCallbacks.erase(newPos);
