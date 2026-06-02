@@ -3,6 +3,7 @@
 
 #include "features/FastLeafDecay.h"
 
+#include <ll/api/service/Bedrock.h>
 #include "ll/api/base/Containers.h"
 #include "ll/api/memory/Hook.h"
 #include <ll/api/chrono/GameChrono.h>
@@ -14,6 +15,7 @@
 #include <mc/world/level/block/Block.h>
 #include <mc/world/level/block/LeavesBlock.h>
 #include <mc/world/level/block/LogBlock.h>
+#include <mc/world/level/dimension/Dimension.h>
 #include <mc/world/level/block/block_events/BlockRandomTickEvent.h>
 #include <mc/world/level/levelgen/structure/BoundingBox.h>
 
