@@ -10,6 +10,7 @@
 #include <ll/api/thread/ServerThreadExecutor.h>
 #include <ll/api/utils/RandomUtils.h>
 #include <mc/util/Random.h>
+#include <mc/world/level/Level.h>
 #include <mc/world/level/BlockPos.h>
 #include <mc/world/level/BlockSource.h>
 #include <mc/world/level/block/Block.h>
