@@ -29,10 +29,6 @@ static constexpr int MAX_PENDING = 512;
 void addLeavesBlock(BlockSource& region, BlockPos const& pos);
 bool isLeaves(Block const& block);
 
-// gCallbacks is only accessed from the server thread (hooks + ServerThreadExecutor
-// callbacks are all server-thread).  The sole exception is disable(), which may
-// be called from a different thread — so we protect only that path with a mutex.
-static std::mutex                                                                   gCallbacksMtx;
 static ll::SmallDenseMap<BlockPos, std::shared_ptr<ll::data::CancellableCallback>> gCallbacks;
 
 LL_TYPE_INSTANCE_HOOK(
@@ -66,8 +62,6 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
 
     for (auto offset : BoundingBox(-1, 1).forEachPos()) {
         auto newPos = pos.add(offset);
-        // Original logic preserved exactly — no lock needed here because
-        // this function and its callbacks both run on the server thread.
         if (!isLeaves(region.getBlock(newPos)) || gCallbacks.contains(newPos)) continue;
         if (gCallbacks.size() >= MAX_PENDING) return;
 
@@ -82,12 +76,17 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
 
                 BlockSource& regionRef = dimension->getBlockSourceFromMainChunkSource();
                 Block const& block     = regionRef.getBlock(newPos);
-                weakDim.reset();
 
                 if (isLeaves(block)) {
                     BlockEvents::BlockRandomTickEvent event(newPos, regionRef, Random::mThreadLocalRandom());
                     static_cast<LeavesBlock const&>(*block.mBlockType).randomTick(event);
                 }
+
+                // Release dimension AFTER randomTick — regionRef and block are
+                // both owned by dimension, so resetting before randomTick finishes
+                // risks dangling references if the refcount drops to zero.
+                weakDim.reset();
+
                 gCallbacks.erase(newPos);
             },
             ll::chrono::ticks(ll::random_utils::rand(DECAY_TICKS_MIN, DECAY_TICKS_MAX))
@@ -107,14 +106,8 @@ void enable() {
 void disable() {
     LeavesBlockRemoveHook::unhook();
     LogBlockRemoveHook::unhook();
-
-    // Lock here because disable() can be called from a non-server thread.
-    // cancel() is safe to call even if the callback already ran — it's a no-op.
-    // After clear(), any in-flight callback that tries gCallbacks.erase() will
-    // simply erase nothing, which is safe.
-    std::lock_guard lock(gCallbacksMtx);
-    for (auto& [pos, cb] : gCallbacks)
-        if (cb) cb->cancel();
+    for (auto& cb : gCallbacks)
+        if (cb.second) cb.second->cancel();
     gCallbacks.clear();
 }
 

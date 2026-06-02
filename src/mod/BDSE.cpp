@@ -223,7 +223,7 @@ void cleanupPlayerChunkBorder(Player& player) {
     gLastChunk.erase(guid);
 }
 
-/*LL_TYPE_INSTANCE_HOOK(
+LL_TYPE_INSTANCE_HOOK(
     PistonQuickPulseHook,
     ll::memory::HookPriority::Normal,
     PistonBlockActor,
@@ -245,7 +245,7 @@ void cleanupPlayerChunkBorder(Player& player) {
     }
 
     origin(region);
-}*/
+}
 
 LL_TYPE_INSTANCE_HOOK(
     PlayerAddLevelHook,
@@ -463,7 +463,7 @@ bool BDSE::enable() {
     AchievementsWillBeDisabledHook::hook();
     DisableAchievementsHook::hook();
     PlayerAddLevelHook::hook();
-    // PistonQuickPulseHook::hook();
+    PistonQuickPulseHook::hook();
     // ConnectedGlass::registerHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
@@ -592,7 +592,7 @@ bool BDSE::disable() {
     AchievementsWillBeDisabledHook::unhook();
     DisableAchievementsHook::unhook();
     PlayerAddLevelHook::unhook();
-    // PistonQuickPulseHook::unhook();
+    PistonQuickPulseHook::unhook();
     // ConnectedGlass::unregisterHooks();
 
     auto& bus = ll::event::EventBus::getInstance();
