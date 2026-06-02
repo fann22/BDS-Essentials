@@ -15,8 +15,8 @@
 #include <mc/world/level/block/Block.h>
 #include <mc/world/level/block/LeavesBlock.h>
 #include <mc/world/level/block/LogBlock.h>
-#include <mc/world/level/dimension/Dimension.h>
 #include <mc/world/level/block/block_events/BlockRandomTickEvent.h>
+#include <mc/world/level/dimension/Dimension.h>
 #include <mc/world/level/levelgen/structure/BoundingBox.h>
 
 namespace bds_essentials::features::fast_leaf_decay {
@@ -66,7 +66,7 @@ void addLeavesBlock(BlockSource& region, BlockPos const& pos) try {
 
         gCallbacks[newPos] = ll::thread::ServerThreadExecutor::getDefault().executeAfter(
             [dimId, newPos]() -> void {
-                auto* level = ll::service::getLevel();
+                auto level = ll::service::getLevel();
                 if (!level) { gCallbacks.erase(newPos); return; }
 
                 auto* dimension = level->getDimension(dimId);
